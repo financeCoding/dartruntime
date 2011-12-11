@@ -6,6 +6,17 @@ http://code.google.com/p/dart/source/browse/branches/bleeding_edge/#bleeding_edg
 
 
 
+
+Prepeare your system
+---------------------
+Ubuntu: sudo apt-get install cmake g++ g++-multilib ia32-libs libssl-dev
+
+See also:
+http://code.google.com/p/chromium/wiki/LinuxBuildInstructionsPrerequisites
+
+
+
+
 Build
 ------
 
@@ -27,7 +38,7 @@ To get started here the commands which are needed on Linux to run a simple dart 
     cd build
     cmake ../dartruntime/cmake/
     make -j4
-    echo "main() { print(\"Hello World!\"); }" > hello.dart
+    echo "main() { print(\"Hello World\!\"); }" > hello.dart
     ./bin/dart ./hello.dart 
 
 
