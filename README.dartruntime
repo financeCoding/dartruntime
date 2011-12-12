@@ -34,6 +34,7 @@ Build
 To get started here the commands which are needed on Linux to run a simple dart script:
 
     git clone git@github.com:syntheticpp/dartruntime.git
+    git checkout -b cmake origin/cmake
     mkdir build
     cd build
     cmake ../dartruntime/cmake/
