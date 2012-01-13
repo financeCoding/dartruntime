@@ -10,6 +10,10 @@ set(EXECUTABLE_OUTPUT_PATH  ${CMAKE_BINARY_DIR}/bin)
 set(LIBRARY_OUTPUT_PATH     ${CMAKE_BINARY_DIR}/lib)
 
 
+option(tests "Enable tests" ON)
+option(bind  "Enable binding tests" ON)
+option(x64   "Generate code for 64-bit" OFF)
+
 project(dartruntime)
 
 include(TargetClass)
@@ -51,8 +55,13 @@ if(CMAKE_COMPILER_IS_GNUCXX)
         set(warn "${warn} -Wno-conversion-null -Wvla")
     endif()
     if(LINUX)
+        if(x64)
+            set(arch 64)
+        else()
+            set(arch 32)
+        endif()
         set(librt -lrt)
-        set(multi "-m32 -MMD -fPIC ")
+        set(multi "-m${arch} -MMD -fPIC ")
     endif()
     if(APPLE)
         set(warn "${warn} -Wno-trigraphs -fmessage-length=0 -Wno-deprecated-declarations")
@@ -60,7 +69,7 @@ if(CMAKE_COMPILER_IS_GNUCXX)
         message(STATUS "Using SDK in '${CMAKE_OSX_SYSROOT}'")
         set(multi "-arch i386 -isysroot ${CMAKE_OSX_SYSROOT}")
     endif()
-    
+
 endif()
 
 
@@ -115,7 +124,7 @@ t_addSources(vm/dart_api_impl.cc vm/debugger_api_impl.cc)
 t_includeDirectories(.)
 t_makeLibrary()
 
- 
+
 t_init(dart_builtin)
 t_findHeaders(bin .h)
 t_findSources(bin .cc)
@@ -172,7 +181,7 @@ t_makeLibrary()
 #
 
 t_init(dart_plain)
-# TODO using bin/main.cc without corelib makes no sense 
+# TODO using bin/main.cc without corelib makes no sense
 t_addSources(bin/main.cc bin/builtin_nolib.cc bin/snapshot_empty.cc)
 t_addSources(vm/bootstrap_nocorelib.cc)
 t_includeDirectories(.)
@@ -182,7 +191,7 @@ t_makeExecutable()
 
 #
 # with corelib
-#    
+#
 
 t_init(dart_corelib)
 t_addSources(vm/bootstrap.cc)
@@ -196,7 +205,7 @@ t_findDartFiles(../corelib/src/implementation)
 t_embedDartFiles(vm/corelib_impl_in.cc ${gen_dir}/corelib_impl.cc)
 t_includeDirectories(.)
 t_makeLibrary()
-  
+
 
 t_init(dart_no_snapshot)
 t_addSources(bin/main.cc bin/builtin.cc bin/snapshot_empty.cc)
@@ -211,7 +220,7 @@ t_linkLibraries(dart_corelib)
 t_includeDirectories(.)
 t_makeExecutable()
 
-        
+
 t_init(dart)
 t_addSources(bin/main.cc bin/builtin_nolib.cc)
 t_addSnapshotFile(bin/snapshot_in.cc ${gen_dir}/snapshot_gen gen_snapshot)
@@ -224,26 +233,39 @@ t_makeExecutable()
 # test
 #
 
-t_init(run_vm_tests)
-t_findSources(vm _test.cc)
-t_findSources(bin _test.cc)
-t_addSources(bin/run_vm_tests.cc)
-t_removeSources(ALL process_test )
-t_addDartFiles(vm/snapshot_test.dart)
-t_embedDartFiles(vm/snapshot_test_in.dat ${gen_dir}/snapshot_test.dat)
-t_includeDirectoriesAbsolute(${gen_dir})
-t_includeDirectories(. vm)
-t_addDefinitions(TESTING)
-t_linkLibraries(dart_corelib)
-t_makeExecutable()
+if(tests)
+    t_init(run_vm_tests)
+    t_findSources(vm _test.cc)
+    t_findSources(bin _test.cc)
+    t_addSources(bin/run_vm_tests.cc)
+    t_removeSources(ALL process_test )
+    t_addDartFiles(vm/snapshot_test.dart)
+    t_embedDartFiles(vm/snapshot_test_in.dat ${gen_dir}/snapshot_test.dat)
+    t_includeDirectoriesAbsolute(${gen_dir})
+    t_includeDirectories(.)
+    t_addDefinitions(TESTING)
+    t_linkLibraries(dart_corelib)
+    t_makeExecutable()
 
 
-message(STATUS)
-get_filename_component(rep_root ${t_top}/.. ABSOLUTE)
-message(STATUS "Run tests from the source folder: '${rep_root}' !")
-message(STATUS)
+    message(STATUS)
+    get_filename_component(rep_root ${t_top}/.. ABSOLUTE)
+    message(STATUS "Run tests from the source folder: '${rep_root}' !")
+    message(STATUS)
+endif()
 
 
+if(bind)
+    macro(p_addExecutables _dir)
+        foreach(_it ${ARGN})
+            t_init(${_dir}_${_it})
+            t_addSources(${_dir}/${_dir}_${_it}.cc)
+            t_linkLibraries(dart_corelib)
+            t_includeDirectories(include)
+            t_makeExecutable()
+        endforeach()
+    endmacro()
 
-
+    p_addExecutables(bind NativeFunction_foo NativeFunction_userdata NativeFunction_nativefield NativeFunction_class)
+endif()
 
