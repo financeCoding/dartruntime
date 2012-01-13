@@ -6,16 +6,17 @@
 #define VM_HEAP_H_
 
 #include "vm/allocation.h"
+#include "vm/assert.h"
 #include "vm/flags.h"
 #include "vm/globals.h"
+#include "vm/pages.h"
+#include "vm/scavenger.h"
 
 namespace dart {
 
 // Forward declarations.
 class Isolate;
 class ObjectPointerVisitor;
-class PageSpace;
-class Scavenger;
 class VirtualMemory;
 
 DECLARE_FLAG(bool, verbose_gc);
@@ -33,18 +34,36 @@ class Heap {
 
   // Default allocation sizes in MB for the old gen and code heaps.
   static const intptr_t kHeapSizeInMB = 512;
-  static const intptr_t kCodeHeapSizeInMB = 4;
+  static const intptr_t kCodeHeapSizeInMB = 8;
 
   ~Heap();
 
   uword Allocate(intptr_t size, Space space) {
     switch (space) {
       case kNew:
+        // Do not attempt to allocate very large objects in new space.
+        if (!PageSpace::IsPageAllocatableSize(size)) {
+          return AllocateOld(size);
+        }
         return AllocateNew(size);
       case kOld:
         return AllocateOld(size);
       case kExecutable:
         return AllocateCode(size);
+      default:
+        UNREACHABLE();
+    }
+    return 0;
+  }
+
+  uword TryAllocate(intptr_t size, Space space) {
+    switch (space) {
+      case kNew:
+        return new_space_->TryAllocate(size);
+      case kOld:
+        return old_space_->TryAllocate(size);
+      case kExecutable:
+        return code_space_->TryAllocate(size);
       default:
         UNREACHABLE();
     }

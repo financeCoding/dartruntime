@@ -53,30 +53,31 @@ const Snapshot* Snapshot::SetupFromBuffer(const void* raw_memory) {
 
 
 RawObject* SnapshotReader::ReadObject() {
-  intptr_t header = Read<intptr_t>();
-  if ((header & kSmiTagMask) == 0) {
-    return reinterpret_cast<RawObject*>(header);
+  int64_t value = Read<int64_t>();
+  if ((value & kSmiTagMask) == 0) {
+    return Integer::New((value >> kSmiTagShift));
   }
-  return ReadObjectImpl(header);
+  ASSERT((value <= kIntptrMax) && (value >= kIntptrMin));
+  return ReadObjectImpl(value);
 }
 
 
 RawClass* SnapshotReader::ReadClassId(intptr_t object_id) {
   ASSERT(kind_ != Snapshot::kFull);
   // Read the class header information and lookup the class.
-  intptr_t class_header = Read<intptr_t>();
+  intptr_t class_header = ReadIntptrValue();
   ASSERT((class_header & kSmiTagMask) != 0);
-  Class& cls = Class::Handle();
+  Class& cls = Class::ZoneHandle(isolate(), Class::null());
   cls ^= LookupInternalClass(class_header);
   AddBackwardReference(object_id, &cls);
   if (cls.IsNull()) {
     // Read the library/class information and lookup the class.
-    String& library_url = String::Handle();
+    String& library_url = String::Handle(isolate(), String::null());
     library_url ^= ReadObjectImpl(class_header);
-    String& class_name = String::Handle();
+    String& class_name = String::Handle(isolate(), String::null());
     class_name ^= ReadObject();
     const Library& library =
-        Library::Handle(Library::LookupLibrary(library_url));
+        Library::Handle(isolate(), Library::LookupLibrary(library_url));
     ASSERT(!library.IsNull());
     cls ^= library.LookupClass(class_name);
   }
@@ -111,11 +112,11 @@ void SnapshotReader::ReadFullSnapshot() {
 
 RawClass* SnapshotReader::LookupInternalClass(intptr_t class_header) {
   SerializedHeaderType header_type = SerializedHeaderTag::decode(class_header);
-  intptr_t header_value = SerializedHeaderData::decode(class_header);
 
   // If the header is an object Id, lookup singleton VM classes or classes
   // stored in the object store.
   if (header_type == kObjectId) {
+    intptr_t header_value = SerializedHeaderData::decode(class_header);
     if (IsSingletonClassId(header_value)) {
       return Object::GetSingletonClass(header_value);  // return the singleton.
     } else if (IsObjectStoreClassId(header_value)) {
@@ -169,13 +170,13 @@ RawObject* SnapshotReader::ReadIndexedObject(intptr_t object_id) {
 
 RawObject* SnapshotReader::ReadInlinedObject(intptr_t object_id) {
   // Read the class header information and lookup the class.
-  intptr_t class_header = Read<intptr_t>();
-  intptr_t tags = Read<intptr_t>();
-  Class& cls = Class::Handle();
-  Object& obj = Object::Handle();
+  intptr_t class_header = ReadIntptrValue();
+  intptr_t tags = ReadIntptrValue();
+  Class& cls = Class::Handle(isolate(), Class::null());
+  Object& obj = Object::Handle(isolate(), Object::null());
   if (SerializedHeaderData::decode(class_header) == kInstanceId) {
     // Object is regular dart instance.
-    Instance& result = Instance::ZoneHandle();
+    Instance& result = Instance::ZoneHandle(isolate(), Instance::null());
     AddBackwardReference(object_id, &result);
 
     cls ^= ReadObject();
@@ -183,7 +184,7 @@ RawObject* SnapshotReader::ReadInlinedObject(intptr_t object_id) {
     intptr_t instance_size = cls.instance_size();
     ASSERT(instance_size > 0);
     // Allocate the instance and read in all the fields for the object.
-    RawObject* raw = Object::Allocate(cls, instance_size, Heap::kNew);
+    RawObject* raw = Instance::New(cls, Heap::kNew);
     result ^= raw;
     intptr_t offset = Object::InstanceSize();
     while (offset < instance_size) {
@@ -193,6 +194,8 @@ RawObject* SnapshotReader::ReadInlinedObject(intptr_t object_id) {
     }
     if (kind_ == Snapshot::kFull) {
       result.SetCreatedFromSnapshot();
+    } else if (result.IsCanonical()) {
+      result = result.Canonicalize();
     }
     return result.raw();
   } else {
@@ -254,7 +257,7 @@ void SnapshotWriter::WriteObject(RawObject* rawobj) {
 
   // First check if it is a Smi (i.e not a heap object).
   if (!rawobj->IsHeapObject()) {
-    Write<RawObject*>(rawobj);
+    Write<int64_t>(reinterpret_cast<intptr_t>(rawobj));
     return;
   }
 
@@ -335,6 +338,7 @@ void SnapshotWriter::WriteFullSnapshot() {
 intptr_t SnapshotWriter::MarkObject(RawObject* raw, RawClass* cls) {
   NoGCScope no_gc;
   intptr_t object_id = forward_list_.length() + kMaxPredefinedObjectIds;
+  ASSERT(object_id <= kMaxObjectId);
   uword value = 0;
   value = SerializedHeaderTag::update(kObjectId, value);
   value = SerializedHeaderData::update(object_id, value);
@@ -376,10 +380,10 @@ void SnapshotWriter::WriteInlinedObject(RawObject* raw) {
     WriteSerializationMarker(kInlined, object_id);
 
     // Indicate this is an instance object.
-    Write<intptr_t>(SerializedHeaderData::encode(kInstanceId));
+    WriteIntptrValue(SerializedHeaderData::encode(kInstanceId));
 
     // Write out the tags.
-    Write<intptr_t>(raw->ptr()->tags_);
+    WriteIntptrValue(raw->ptr()->tags_);
 
     // Write out the class information for this object.
     WriteObject(cls);
@@ -419,6 +423,7 @@ void SnapshotWriter::WriteClassId(RawClass* cls) {
     // case.
     // Write out the class and tags information.
     WriteObjectHeader(Object::kClassClass, cls->ptr()->tags_);
+
     // Write out the library url and class name.
     RawLibrary* library = cls->ptr()->library_;
     ASSERT(library != Library::null());
@@ -428,9 +433,14 @@ void SnapshotWriter::WriteClassId(RawClass* cls) {
 }
 
 
-void ScriptSnapshotWriter::WriteScriptSnapshot() {
-  // TODO(asiva): Need to implement this.
-  UNIMPLEMENTED();
+void ScriptSnapshotWriter::WriteScriptSnapshot(const Library& lib) {
+  ASSERT(kind() == Snapshot::kScript);
+
+  // Write out the library object.
+  WriteObject(lib.raw());
+
+  // Finalize the snapshot buffer.
+  FinalizeBuffer();
 }
 
 

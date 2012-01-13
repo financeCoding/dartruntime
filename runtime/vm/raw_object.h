@@ -33,11 +33,15 @@ namespace dart {
   V(Code)                                                                      \
   V(Instructions)                                                              \
   V(PcDescriptors)                                                             \
+  V(LocalVarDescriptors)                                                       \
   V(ExceptionHandlers)                                                         \
   V(Context)                                                                   \
   V(ContextScope)                                                              \
-  V(UnhandledException)                                                        \
-  V(ApiError)                                                                  \
+  V(Error)                                                                     \
+    V(ApiError)                                                                \
+    V(LanguageError)                                                           \
+    V(UnhandledException)                                                      \
+    V(UnwindError)                                                             \
   V(Instance)                                                                  \
     V(Number)                                                                  \
       V(Integer)                                                               \
@@ -90,6 +94,7 @@ enum ObjectAlignment {
   kOldObjectAlignmentOffset = 0,
   // Object sizes are aligned to kObjectAlignment.
   kObjectAlignment = 2 * kWordSize,
+  kObjectAlignmentLog2 = kWordSizeLog2 + 1,
   kObjectAlignmentMask = kObjectAlignment - 1,
 };
 
@@ -132,17 +137,54 @@ enum {
 // RawObject is the base class of all raw objects, even though it carries the
 // class_ field not all raw objects are allocated in the heap and thus cannot
 // be dereferenced (e.g. RawSmi).
-//
-// The tags field which is a part of the object header uses the following
-// bit fields for storing tags.
-//
-// bit 0 - SmiTag
-// bit 1 - Mark bit.
-// bit 2 - Canonical object.
-// bit 3 - Created from a full snapshot.
-//
 class RawObject {
  public:
+  // The tags field which is a part of the object header uses the following
+  // bit fields for storing tags.
+  enum TagBits {
+    kFreeBit = 0,
+    kMarkBit = 1,
+    kCanonicalBit = 2,
+    kFromSnapshotBit = 3,
+    kReservedBit10K = 4,
+    kReservedBit100K = 5,
+    kReservedBit1M = 6,
+    kReservedBit10M = 7,
+    kSizeTagBit = 8,
+    kSizeTagSize = 8,
+  };
+
+  // Encodes the object size in the tag in units of object alignment.
+  class SizeTag {
+   public:
+    static const intptr_t kMaxSizeTag =
+        ((1 << RawObject::kSizeTagSize) - 1) << kObjectAlignmentLog2;
+
+    static uword encode(intptr_t size) {
+      return SizeBits::encode(SizeToTagValue(size));
+    }
+
+    static intptr_t decode(uword tag) {
+      return TagValueToSize(SizeBits::decode(tag));
+    }
+
+    static uword update(intptr_t size, uword tag) {
+      return SizeBits::update(SizeToTagValue(size), tag);
+    }
+
+  private:
+    // The actual unscaled bit field used within the tag field.
+    class SizeBits : public BitField<intptr_t, kSizeTagBit, kSizeTagSize> {};
+
+    static intptr_t SizeToTagValue(intptr_t size) {
+      ASSERT(Utils::IsAligned(size, kObjectAlignment));
+      return  (size > kMaxSizeTag) ? 0 : (size >> kObjectAlignmentLog2);
+    }
+    static intptr_t TagValueToSize(intptr_t value) {
+      return value << kObjectAlignmentLog2;
+    }
+  };
+
   bool IsHeapObject() const {
     uword value = reinterpret_cast<uword>(this);
     return (value & kSmiTagMask) == kHeapObjectTag;
@@ -159,20 +201,17 @@ class RawObject {
 
   // Support for GC marking bit.
   bool IsMarked() const {
-    uword header_bits = reinterpret_cast<uword>(ptr()->class_);
-    uword mark_bits = header_bits & kMarkingMask;
-    ASSERT((mark_bits == kNotMarked) || (mark_bits == kMarked));
-    return mark_bits == kMarked;
+    return MarkBit::decode(ptr()->tags_);
   }
   void SetMarkBit() {
     ASSERT(!IsMarked());
-    uword header_bits = reinterpret_cast<uword>(ptr()->class_);
-    ptr()->class_ = reinterpret_cast<RawClass*>(header_bits | kMarked);
+    uword tags = ptr()->tags_;
+    ptr()->tags_ = MarkBit::update(true, tags);
   }
   void ClearMarkBit() {
     ASSERT(IsMarked());
-    uword header_bits = reinterpret_cast<uword>(ptr()->class_);
-    ptr()->class_ = reinterpret_cast<RawClass*>(header_bits ^ kMarkBit);
+    uword tags = ptr()->tags_;
+    ptr()->tags_ = MarkBit::update(false, tags);
   }
 
   // Support for object tags.
@@ -180,19 +219,30 @@ class RawObject {
     return CanonicalObjectTag::decode(ptr()->tags_);
   }
   void SetCanonical() {
-    intptr_t tags = ptr()->tags_;
+    uword tags = ptr()->tags_;
     ptr()->tags_ = CanonicalObjectTag::update(true, tags);
   }
-  bool IsCreatedFromSnapshot() {
+  bool IsCreatedFromSnapshot() const {
     return CreatedFromSnapshotTag::decode(ptr()->tags_);
   }
   void SetCreatedFromSnapshot() {
-    intptr_t tags = ptr()->tags_;
+    uword tags = ptr()->tags_;
     ptr()->tags_ = CreatedFromSnapshotTag::update(true, tags);
   }
 
+  intptr_t Size() const {
+    uword tags = ptr()->tags_;
+    intptr_t result = SizeTag::decode(tags);
+    if ((result != 0) && !FreeBit::decode(tags)) {
+      ASSERT(result == SizeFromClass());
+      return result;
+    }
+    result = SizeFromClass();
+    ASSERT((result > SizeTag::kMaxSizeTag) || FreeBit::decode(tags));
+    return result;
+  }
+
   void Validate() const;
-  intptr_t Size() const;
   intptr_t VisitPointers(ObjectPointerVisitor* visitor);
 
   static RawObject* FromAddr(uword addr) {
@@ -215,27 +265,24 @@ class RawObject {
 
  protected:
   RawClass* class_;
-  intptr_t tags_;  // Various object tags (bits).
+  uword tags_;  // Various object tags (bits).
 
  private:
-  enum {
-    kMarkingMask = 3,
-    kNotMarked = 1,  // Tagged pointer.
-    kMarked = 3,  // Tagged pointer and forwarding bit set.
-    kMarkBit = 2,
-  };
+  class FreeBit : public BitField<bool, kFreeBit, 1> {};
 
-  class CanonicalObjectTag : public BitField<bool, 2, 1> {
-  };
+  class MarkBit : public BitField<bool, kMarkBit, 1> {};
 
-  class CreatedFromSnapshotTag : public BitField<bool, 3, 1> {
-  };
+  class CanonicalObjectTag : public BitField<bool, kCanonicalBit, 1> {};
+
+  class CreatedFromSnapshotTag : public BitField<bool, kFromSnapshotBit, 1> {};
 
   RawObject* ptr() const {
     ASSERT(IsHeapObject());
     return reinterpret_cast<RawObject*>(
         reinterpret_cast<uword>(this) - kHeapObjectTag);
   }
+
+  intptr_t SizeFromClass() const;
 
   friend class Object;
   friend class Array;
@@ -573,6 +620,7 @@ class RawCode : public RawObject {
   RawFunction* function_;
   RawExceptionHandlers* exception_handlers_;
   RawPcDescriptors* pc_descriptors_;
+  RawLocalVarDescriptors* var_descriptors_;
   // Ongoing redesign of inline caches may soon remove the need for 'ic_data_'.
   RawArray* ic_data_;  // Used to store IC stub data (see class ICData).
   RawObject** to() {
@@ -608,6 +656,23 @@ class RawPcDescriptors : public RawObject {
 
   // Variable length data follows here.
   intptr_t data_[0];
+};
+
+
+class RawLocalVarDescriptors : public RawObject {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(LocalVarDescriptors);
+
+  struct VarInfo {
+    intptr_t index;      // Slot index on stack or in context.
+    intptr_t scope_id;   // Scope to which the variable belongs.
+    intptr_t begin_pos;  // Token position of scope start.
+    intptr_t end_pos;    // Token position of scope end.
+  };
+
+  intptr_t length_;  // Number of descriptors.
+  RawArray* names_;  // Array of [length_] variable names.
+
+  VarInfo data_[0];   // Variable info with [length_] entries.
 };
 
 
@@ -664,7 +729,38 @@ class RawContextScope : public RawObject {
 };
 
 
-class RawUnhandledException : public RawObject {
+class RawError : public RawObject {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(Error);
+};
+
+
+class RawApiError : public RawError {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(ApiError);
+
+  RawObject** from() {
+    return reinterpret_cast<RawObject**>(&ptr()->message_);
+  }
+  RawString* message_;
+  RawObject** to() {
+    return reinterpret_cast<RawObject**>(&ptr()->message_);
+  }
+};
+
+
+class RawLanguageError : public RawError {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(LanguageError);
+
+  RawObject** from() {
+    return reinterpret_cast<RawObject**>(&ptr()->message_);
+  }
+  RawString* message_;
+  RawObject** to() {
+    return reinterpret_cast<RawObject**>(&ptr()->message_);
+  }
+};
+
+
+class RawUnhandledException : public RawError {
   RAW_HEAP_OBJECT_IMPLEMENTATION(UnhandledException);
 
   RawObject** from() {
@@ -678,15 +774,15 @@ class RawUnhandledException : public RawObject {
 };
 
 
-class RawApiError : public RawObject {
-  RAW_HEAP_OBJECT_IMPLEMENTATION(ApiError);
+class RawUnwindError : public RawError {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(UnwindError);
 
   RawObject** from() {
-    return reinterpret_cast<RawObject**>(&ptr()->data_);
+    return reinterpret_cast<RawObject**>(&ptr()->message_);
   }
-  RawObject* data_;
+  RawString* message_;
   RawObject** to() {
-    return reinterpret_cast<RawObject**>(&ptr()->data_);
+    return reinterpret_cast<RawObject**>(&ptr()->message_);
   }
 };
 

@@ -5,8 +5,6 @@
 #ifndef VM_ISOLATE_H_
 #define VM_ISOLATE_H_
 
-#include <limits.h>
-
 #include "include/dart_api.h"
 #include "vm/assert.h"
 #include "vm/store_buffer.h"
@@ -45,6 +43,11 @@ class Isolate {
 
   // Visit all object pointers.
   void VisitObjectPointers(ObjectPointerVisitor* visitor, bool validate_frames);
+
+  void VisitStrongObjectPointers(ObjectPointerVisitor* visitor,
+                                 bool validate_frames);
+
+  void VisitWeakObjectPointers(ObjectPointerVisitor* visitor);
 
   StoreBufferBlock* store_buffer() { return &store_buffer_; }
 

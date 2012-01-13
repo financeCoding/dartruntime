@@ -5,8 +5,8 @@
 #include "vm/dart.h"
 
 #include "vm/code_index_table.h"
-#include "vm/freelist.h"
 #include "vm/flags.h"
+#include "vm/freelist.h"
 #include "vm/handles.h"
 #include "vm/heap.h"
 #include "vm/isolate.h"
@@ -65,6 +65,7 @@ Isolate* Dart::CreateIsolate() {
 
 void Dart::InitializeIsolate(const uint8_t* snapshot_buffer, void* data) {
   // Initialize the new isolate.
+  TIMERSCOPE(time_isolate_initialization);
   Isolate* isolate = Isolate::Current();
   ASSERT(isolate != NULL);
   Zone zone(isolate);
@@ -79,9 +80,7 @@ void Dart::InitializeIsolate(const uint8_t* snapshot_buffer, void* data) {
     // of Object::Init(..) in a regular isolate creation path.
     Object::InitFromSnapshot(isolate);
     const Snapshot* snapshot = Snapshot::SetupFromBuffer(snapshot_buffer);
-    SnapshotReader reader(snapshot,
-                          isolate->heap(),
-                          isolate->object_store());
+    SnapshotReader reader(snapshot, isolate);
     reader.ReadFullSnapshot();
   }
 

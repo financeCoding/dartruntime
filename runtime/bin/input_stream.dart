@@ -57,6 +57,25 @@ interface InputStream {
   int available();
 
   /**
+   * Pipe the content of this input stream directly to the output
+   * stream [output]. The default behavior is to close the output when
+   * all the data from the input stream have been written. Specifying
+   * [:false:] for the optional argument [close] keeps the output
+   * stream open after writing all data from the input stream. The
+   * default value for [close] is [:true:].
+   */
+  void pipe(OutputStream output, [bool close]);
+
+  /**
+   * Close the underlying communication channel to avoid getting any
+   * more data. In normal situations, where all data is read from the
+   * stream until the close handler is called, calling [close] is not
+   * required. When [close] is used the close handler will still be
+   * called.
+   */
+  void close();
+
+  /**
    * Returns whether the stream is closed. There will be no more data
    * to read.
    */
@@ -86,7 +105,7 @@ interface InputStream {
  * string data. This data can be read either as string chunks or as
  * lines separated by line termination character sequences.
  */
-interface StringInputStream factory _StringInputStream {
+interface StringInputStream default _StringInputStream {
   /**
    * Decodes a binary input stream into characters using the specified
    * encoding.
@@ -101,9 +120,8 @@ interface StringInputStream factory _StringInputStream {
 
   /**
    * Reads the next line from the stream. The line ending characters
-   * will not be part og the returned string. If a full line is not
-   * available null will be returned. The line break character(s) are
-   * discarded.
+   * will not be part of the returned string. If a full line is not
+   * available null will be returned.
    */
   String readLine();
 
@@ -120,14 +138,14 @@ interface StringInputStream factory _StringInputStream {
 
   /**
    * Sets the handler that gets called when data is available. The two
-   * handlers [dataHandler} and [lineHandler] are mutually exclusive
+   * handlers [dataHandler] and [lineHandler] are mutually exclusive
    * and setting one will remove the other.
    */
   void set dataHandler(void callback());
 
   /**
    * Sets the handler that gets called when a line is available. The
-   * two handlers [dataHandler} and [lineHandler] are mutually
+   * two handlers [dataHandler] and [lineHandler] are mutually
    * exclusive and setting one will remove the other.
    */
   void set lineHandler(void callback());
@@ -150,7 +168,7 @@ interface StringInputStream factory _StringInputStream {
  * A chunked input stream wraps a basic input stream and supplies
  * binary data in configurable chunk sizes.
  */
-interface ChunkedInputStream factory _ChunkedInputStream {
+interface ChunkedInputStream default _ChunkedInputStream {
   /**
    * Adds buffering to an input stream and provide the ability to read
    * the data in known size chunks.
@@ -203,6 +221,7 @@ interface ChunkedInputStream factory _ChunkedInputStream {
 
 class StreamException implements Exception {
   const StreamException([String this.message = ""]);
+  const StreamException.streamClosed() : message = "Stream closed";
   String toString() => "StreamException: $message";
   final String message;
 }

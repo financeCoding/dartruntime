@@ -58,6 +58,15 @@ namespace dart {
 class ObjectPointerVisitor;
 
 
+class HandleVisitor {
+ public:
+  virtual void Visit(uword* addr) = 0;
+
+  virtual ~HandleVisitor() {
+  }
+};
+
+
 template <int kHandleSizeInWords, int kHandlesPerChunk, int kOffsetOfRawPtr>
 class Handles {
  public:
@@ -73,14 +82,17 @@ class Handles {
   // Visit all object pointers stored in the various handles.
   void VisitObjectPointers(ObjectPointerVisitor* visitor);
 
+  // Visits all of the various handles.
+  void Visit(HandleVisitor* visitor);
+
   // Allocates a handle in the current handle scope. This handle is valid only
   // in the current handle scope and is destroyed when the current handle
   // scope ends.
-  static uword AllocateHandle();
+  static uword AllocateHandle(Isolate* isolate);
 
   // Allocates a handle in the current zone. This handle will be destroyed
   // when the current zone is destroyed.
-  static uword AllocateZoneHandle();
+  static uword AllocateZoneHandle(Isolate* isolate);
 
   // Returns true if specified handle is a zone handle.
   static bool IsZoneHandle(uword handle);
@@ -141,6 +153,9 @@ class Handles {
 
     // Visit all object pointers in the handle block.
     void VisitObjectPointers(ObjectPointerVisitor* visitor);
+
+    // Visit all of the handles in the handle block.
+    void Visit(HandleVisitor* visitor);
 
 #if defined(DEBUG)
     // Zaps the free handle area to an uninitialized value.
@@ -225,11 +240,11 @@ class VMHandles : public Handles<kVMHandleSizeInWords,
   // Allocates a handle in the current handle scope. This handle is valid only
   // in the current handle scope and is destroyed when the current handle
   // scope ends.
-  static uword AllocateHandle();
+  static uword AllocateHandle(Isolate* isolate);
 
   // Allocates a handle in the current zone. This handle will be destroyed
   // when the current zone is destroyed.
-  static uword AllocateZoneHandle();
+  static uword AllocateZoneHandle(Isolate* isolate);
 
   // Returns true if specified handle is a zone handle.
   static bool IsZoneHandle(uword handle);

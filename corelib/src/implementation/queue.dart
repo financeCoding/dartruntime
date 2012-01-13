@@ -102,9 +102,8 @@ class DoubleLinkedQueue<E> implements Queue<E> {
     _sentinel = new _DoubleLinkedQueueEntrySentinel<E>();
   }
 
-  // See issue 417. Works in the vm, fails in dartc and frog.
-  factory DoubleLinkedQueue.from(Iterable/*<E>*/ other) {
-    Queue/*<E>*/ list = new DoubleLinkedQueue();
+  factory DoubleLinkedQueue.from(Iterable<E> other) {
+    Queue<E> list = new DoubleLinkedQueue();
     for (final e in other) {
       list.addLast(e);
     }
@@ -205,6 +204,18 @@ class DoubleLinkedQueue<E> implements Queue<E> {
     }
     return false;
   }
+
+  Queue map(f(E element)) {
+    Queue other = new Queue();
+    DoubleLinkedQueueEntry<E> entry = _sentinel._next;
+    while (entry !== _sentinel) {
+      DoubleLinkedQueueEntry<E> nextEntry = entry._next;
+      other.addLast(f(entry._element));
+      entry = nextEntry;
+    }
+    return other;
+  }
+
 
   Queue<E> filter(bool f(E element)) {
     Queue<E> other = new Queue<E>();

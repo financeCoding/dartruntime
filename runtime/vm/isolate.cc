@@ -294,8 +294,7 @@ static RawInstance* DeserializeMessage(void* data) {
   ASSERT(snapshot->IsMessageSnapshot());
 
   // Read object back from the snapshot.
-  Isolate* isolate = Isolate::Current();
-  SnapshotReader reader(snapshot, isolate->heap(), isolate->object_store());
+  SnapshotReader reader(snapshot, Isolate::Current());
   Instance& instance = Instance::Handle();
   instance ^= reader.ReadObject();
   return instance.raw();
@@ -334,6 +333,13 @@ RawObject* Isolate::StandardRunLoop() {
 
 void Isolate::VisitObjectPointers(ObjectPointerVisitor* visitor,
                                   bool validate_frames) {
+  VisitStrongObjectPointers(visitor, validate_frames);
+  VisitWeakObjectPointers(visitor);
+}
+
+
+void Isolate::VisitStrongObjectPointers(ObjectPointerVisitor* visitor,
+                                        bool validate_frames) {
   ASSERT(visitor != NULL);
 
   // Visit objects in the object store.
@@ -355,7 +361,7 @@ void Isolate::VisitObjectPointers(ObjectPointerVisitor* visitor,
 
   // Visit the dart api state for all local and persistent handles.
   if (api_state() != NULL) {
-    api_state()->VisitObjectPointers(visitor);
+    api_state()->VisitStrongObjectPointers(visitor);
   }
 
   // Visit all objects in the code index table.
@@ -368,6 +374,13 @@ void Isolate::VisitObjectPointers(ObjectPointerVisitor* visitor,
 
   // Visit objects in the debugger.
   debugger()->VisitObjectPointers(visitor);
+}
+
+
+void Isolate::VisitWeakObjectPointers(ObjectPointerVisitor* visitor) {
+  if (api_state() != NULL) {
+    api_state()->VisitWeakObjectPointers(visitor);
+  }
 }
 
 }  // namespace dart

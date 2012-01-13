@@ -7,8 +7,6 @@ prefix vm
 # When a spawned isolate throws an uncaught exception, we terminate the vm.
 RunLoop_ExceptionChild: Fail
 
-# Application snapshots are not implemented yet.
-ScriptSnapshot: Skip
-
-# Breakpoint needs to be reimplemented after StackOverflow check moved.
-Breakpoint: Fail
+# Thread pool currently unimplemented on Windows.
+[ $system == win32 ]
+ThreadPoolStartStop: Skip

@@ -13,6 +13,11 @@
 namespace dart {
 
 void RawObject::Validate() const {
+  if (Object::null_class_ == reinterpret_cast<RawClass*>(kHeapObjectTag)) {
+    // Validation relies on properly initialized class classes. Skip if the
+    // VM is still being initialized.
+    return;
+  }
   // All Smi values are valid.
   if (!IsHeapObject()) {
     return;
@@ -23,23 +28,20 @@ void RawObject::Validate() const {
   RawClass* raw_class_class = raw_class->ptr()->class_;
   ASSERT(raw_class_class->IsHeapObject());
   ASSERT(raw_class_class->ptr()->instance_kind_ == kClass);
+
+  // Validate that the tags_ field is sensible.
+  intptr_t tags = ptr()->tags_;
+  ASSERT((tags & 0xffff00f0) == 0);
 }
 
 
-intptr_t RawObject::Size() const {
+intptr_t RawObject::SizeFromClass() const {
   NoHandleScope no_handles(Isolate::Current());
 
   // Only reasonable to be called on heap objects.
   ASSERT(IsHeapObject());
 
   RawClass* raw_class = ptr()->class_;
-  if (IsMarked()) {
-    // If the object is marked we need to remove the marking bits from the
-    // raw_class which we loaded above.
-    uword header_bits = reinterpret_cast<uword>(raw_class);
-    header_bits = (header_bits & ~kMarkingMask) | kNotMarked;
-    raw_class = reinterpret_cast<RawClass*>(header_bits);
-  }
   intptr_t instance_size = raw_class->ptr()->instance_size_;
   ObjectKind instance_kind = raw_class->ptr()->instance_kind_;
 
@@ -128,6 +130,13 @@ intptr_t RawObject::Size() const {
         instance_size = PcDescriptors::InstanceSize(num_descriptors);
         break;
       }
+      case kLocalVarDescriptors: {
+        const RawLocalVarDescriptors* raw_descriptors =
+            reinterpret_cast<const RawLocalVarDescriptors*>(this);
+        intptr_t num_descriptors = raw_descriptors->ptr()->length_;
+        instance_size = LocalVarDescriptors::InstanceSize(num_descriptors);
+        break;
+      }
       case kExceptionHandlers: {
         const RawExceptionHandlers* raw_handlers =
             reinterpret_cast<const RawExceptionHandlers*>(this);
@@ -142,12 +151,23 @@ intptr_t RawObject::Size() const {
         instance_size = JSRegExp::InstanceSize(data_length);
         break;
       }
+      case kFreeListElement: {
+        ASSERT(FreeBit::decode(ptr()->tags_));
+        uword addr = RawObject::ToAddr(const_cast<RawObject*>(this));
+        FreeListElement* element = reinterpret_cast<FreeListElement*>(addr);
+        instance_size = element->Size();
+        break;
+      }
       default:
         UNREACHABLE();
         break;
     }
   }
   ASSERT(instance_size != 0);
+  intptr_t tags = ptr()->tags_;
+  ASSERT((instance_size == (SizeTag::decode(tags))) ||
+         (SizeTag::decode(tags) == 0) ||
+         FreeBit::decode(tags));
   return instance_size;
 }
 
@@ -161,19 +181,10 @@ intptr_t RawObject::VisitPointers(ObjectPointerVisitor* visitor) {
 
   // Read the necessary data out of the class before visting the class itself.
   RawClass* raw_class = ptr()->class_;
-  if (IsMarked()) {
-    // If the object is marked we need to remove the marking bits from the
-    // raw_class which we loaded above.
-    uword header_bits = reinterpret_cast<uword>(raw_class);
-    header_bits = (header_bits & ~kMarkingMask) | kNotMarked;
-    raw_class = reinterpret_cast<RawClass*>(header_bits);
-  }
   ObjectKind kind = raw_class->ptr()->instance_kind_;
 
   // Visit the class before visting the fields.
-  if (!IsMarked()) {
-    visitor->VisitPointer(reinterpret_cast<RawObject**>(&ptr()->class_));
-  }
+  visitor->VisitPointer(reinterpret_cast<RawObject**>(&ptr()->class_));
 
   switch (kind) {
 #define RAW_VISITPOINTERS(clazz) \
@@ -185,6 +196,7 @@ intptr_t RawObject::VisitPointers(ObjectPointerVisitor* visitor) {
     CLASS_LIST_NO_OBJECT(RAW_VISITPOINTERS)
 #undef RAW_VISITPOINTERS
     case kFreeListElement: {
+      ASSERT(FreeBit::decode(ptr()->tags_));
       // Nothing to visit for free list elements.
       uword addr = RawObject::ToAddr(this);
       FreeListElement* element = reinterpret_cast<FreeListElement*>(addr);
@@ -198,6 +210,7 @@ intptr_t RawObject::VisitPointers(ObjectPointerVisitor* visitor) {
   }
 
   ASSERT(size != 0);
+  ASSERT(size == Size());
   return size;
 }
 
@@ -345,6 +358,15 @@ intptr_t RawPcDescriptors::VisitPcDescriptorsPointers(
 }
 
 
+intptr_t RawLocalVarDescriptors::VisitLocalVarDescriptorsPointers(
+    RawLocalVarDescriptors* raw_obj, ObjectPointerVisitor* visitor) {
+  RawLocalVarDescriptors* obj = raw_obj->ptr();
+  intptr_t len = obj->length_;
+  visitor->VisitPointer(reinterpret_cast<RawObject**>(&obj->names_));
+  return LocalVarDescriptors::InstanceSize(len);
+}
+
+
 intptr_t RawExceptionHandlers::VisitExceptionHandlersPointers(
     RawExceptionHandlers* raw_obj, ObjectPointerVisitor* visitor) {
   RawExceptionHandlers* obj = raw_obj->ptr();
@@ -370,10 +392,11 @@ intptr_t RawContextScope::VisitContextScopePointers(
 }
 
 
-intptr_t RawUnhandledException::VisitUnhandledExceptionPointers(
-    RawUnhandledException* raw_obj, ObjectPointerVisitor* visitor) {
-  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
-  return UnhandledException::InstanceSize();
+intptr_t RawError::VisitErrorPointers(RawError* raw_obj,
+                                      ObjectPointerVisitor* visitor) {
+  // Error is an abstract class.
+  UNREACHABLE();
+  return 0;
 }
 
 
@@ -381,6 +404,27 @@ intptr_t RawApiError::VisitApiErrorPointers(
     RawApiError* raw_obj, ObjectPointerVisitor* visitor) {
   visitor->VisitPointers(raw_obj->from(), raw_obj->to());
   return ApiError::InstanceSize();
+}
+
+
+intptr_t RawLanguageError::VisitLanguageErrorPointers(
+    RawLanguageError* raw_obj, ObjectPointerVisitor* visitor) {
+  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
+  return LanguageError::InstanceSize();
+}
+
+
+intptr_t RawUnhandledException::VisitUnhandledExceptionPointers(
+    RawUnhandledException* raw_obj, ObjectPointerVisitor* visitor) {
+  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
+  return UnhandledException::InstanceSize();
+}
+
+
+intptr_t RawUnwindError::VisitUnwindErrorPointers(
+    RawUnwindError* raw_obj, ObjectPointerVisitor* visitor) {
+  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
+  return UnwindError::InstanceSize();
 }
 
 

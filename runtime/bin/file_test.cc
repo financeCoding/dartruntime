@@ -1,11 +1,10 @@
-// Copyright (c) 2011, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 #include "bin/file.h"
-
+#include "platform/globals.h"
 #include "vm/assert.h"
-#include "vm/globals.h"
 #include "vm/unit_test.h"
 
 
@@ -23,7 +22,7 @@ static const char* GetFileName(const char* name) {
 
 UNIT_TEST_CASE(Read) {
   const char* kFilename = GetFileName("runtime/bin/file_test.cc");
-  File* file = File::Open(kFilename, false);
+  File* file = File::Open(kFilename, File::kRead);
   EXPECT(file != NULL);
   EXPECT_STREQ(kFilename, file->name());
   char buffer[16];
@@ -39,7 +38,7 @@ UNIT_TEST_CASE(Read) {
 UNIT_TEST_CASE(FileLength) {
   const char* kFilename =
       GetFileName("runtime/tests/vm/data/fixed_length_file");
-  File* file = File::Open(kFilename, false);
+  File* file = File::Open(kFilename, File::kRead);
   EXPECT(file != NULL);
   EXPECT_EQ(42, file->Length());
   delete file;
@@ -50,7 +49,7 @@ UNIT_TEST_CASE(FilePosition) {
   char buf[42];
   const char* kFilename =
       GetFileName("runtime/tests/vm/data/fixed_length_file");
-  File* file = File::Open(kFilename, false);
+  File* file = File::Open(kFilename, File::kRead);
   EXPECT(file != NULL);
   EXPECT(file->ReadFully(buf, 12));
   EXPECT_EQ(12, file->Position());

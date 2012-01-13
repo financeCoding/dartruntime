@@ -24,7 +24,7 @@ namespace dart {
 
 DEFINE_FLAG(bool, disassemble, false, "Disassemble dart code.");
 DEFINE_FLAG(bool, trace_compiler, false, "Trace compiler operations.");
-DEFINE_FLAG(int, deoptimization_counter_threshold, 2,
+DEFINE_FLAG(int, deoptimization_counter_threshold, 5,
     "How many times we allow deoptimization before we disallow"
     " certain optimizations");
 
@@ -127,6 +127,7 @@ static void CompileFunctionHelper(const Function& function, bool optimized) {
           Code::Handle(Code::FinalizeCode(function_fullname, &assembler));
       code.set_is_optimized(false);
       code_gen.FinalizePcDescriptors(code);
+      code_gen.FinalizeVarDescriptors(code);
       code_gen.FinalizeExceptionHandlers(code);
       function.set_unoptimized_code(code);
       function.SetCode(code);
@@ -177,6 +178,20 @@ static void CompileFunctionHelper(const Function& function, bool optimized) {
     const PcDescriptors& descriptors =
         PcDescriptors::Handle(code.pc_descriptors());
     OS::Print("%s", descriptors.ToCString());
+    OS::Print("}\n");
+    OS::Print("Variable Descriptors for function '%s' {\n", function_fullname);
+    const LocalVarDescriptors& var_descriptors =
+        LocalVarDescriptors::Handle(code.var_descriptors());
+    intptr_t var_desc_length = var_descriptors.Length();
+    String& var_name = String::Handle();
+    for (intptr_t i = 0; i < var_desc_length; i++) {
+      var_name = var_descriptors.GetName(i);
+      intptr_t scope_id, ignore;
+      var_descriptors.GetScopeInfo(i, &scope_id, &ignore, &ignore);
+      intptr_t slot = var_descriptors.GetSlotIndex(i);
+      OS::Print("  var %s scope %ld offset %ld\n",
+                var_name.ToCString(), scope_id, slot);
+    }
     OS::Print("}\n");
     OS::Print("Exception Handlers for function '%s' {\n", function_fullname);
     const ExceptionHandlers& handlers =

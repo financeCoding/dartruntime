@@ -163,6 +163,9 @@ class GrowableObjectArray<T> implements List<T> {
   }
 
   T removeLast() {
+    if (_length == 0) {
+      throw new IndexOutOfRangeException(-1);
+    }
     _length--;
     return backingArray[_length];
   }
@@ -195,6 +198,10 @@ class GrowableObjectArray<T> implements List<T> {
     }
   }
 
+  Collection map(f(T element)) {
+    return Collections.map(this, new GrowableObjectArray.withCapacity(length), f);
+  }
+
   Collection<T> filter(bool f(T element)) {
     return Collections.filter(this, new GrowableObjectArray<T>(), f);
   }
@@ -217,6 +224,10 @@ class GrowableObjectArray<T> implements List<T> {
 
   void sort(int compare(T a, T b)) {
     DualPivotQuicksort.sort(this, compare);
+  }
+
+  String toString() {
+    return Arrays.asString(this);
   }
 
   Iterator<T> iterator() {

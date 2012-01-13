@@ -26,6 +26,7 @@ LocalScope::LocalScope(LocalScope* parent, int function_level, int loop_level)
       loop_level_(loop_level),
       context_level_(LocalScope::kUnitializedContextLevel_),
       num_context_variables_(0),
+      end_token_index_(0),
       variables_(),
       labels_() {
   // Hook this node into the children of the parent, unless the parent has a
@@ -169,6 +170,47 @@ int LocalScope::AllocateVariables(int first_parameter_index,
     child = child->sibling();
   }
   return min_frame_index;
+}
+
+
+RawLocalVarDescriptors* LocalScope::GetVarDescriptors() {
+  GrowableArray<LocalVariable*> vars(8);
+  // Variables of each scope are guaranteed to be consecutive elements
+  // in array vars. See CollectLocalVariables() below. The outermost
+  // scope (containing the function parameters) has id 0.
+  CollectLocalVariables(&vars);
+  const LocalVarDescriptors& var_desc =
+      LocalVarDescriptors::Handle(LocalVarDescriptors::New(vars.length()));
+  intptr_t scope_id = -1;
+  LocalScope* current_scope = NULL;
+  for (int i = 0;  i < vars.length(); i++) {
+    LocalVariable* var = vars[i];
+    if (current_scope != var->owner()) {
+      current_scope = var->owner();
+      scope_id += 1;
+    }
+    var_desc.SetVar(i, var->name(), var->index(),
+        scope_id, var->token_index(), var->owner()->end_token_index());
+  }
+  return var_desc.raw();
+}
+
+
+// Add variables that are declared in this scope to vars, then collect
+// variables of children, followed by siblings.
+void LocalScope::CollectLocalVariables(GrowableArray<LocalVariable*>* vars) {
+  for (int i = 0; i < this->variables_.length(); i++) {
+    LocalVariable* var = variables_[i];
+    if ((var->owner() == this) && Scanner::IsIdent(var->name())) {
+      vars->Add(this->variables_[i]);
+    }
+  }
+  if (child() != NULL) {
+    child()->CollectLocalVariables(vars);
+  }
+  if (sibling() != NULL) {
+    sibling()->CollectLocalVariables(vars);
+  }
 }
 
 

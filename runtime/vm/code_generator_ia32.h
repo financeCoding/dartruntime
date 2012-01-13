@@ -16,7 +16,7 @@
 
 namespace dart {
 
-// Forward Declarations.
+// Forward declarations.
 class Assembler;
 class AstNode;
 class CodeGenerator;
@@ -108,6 +108,9 @@ NODE_LIST(DEFINE_VISITOR_FUNCTION)
   // Add pc descriptors to code.
   void FinalizePcDescriptors(const Code& code);
 
+  // Add local variable descriptors to code.
+  void FinalizeVarDescriptors(const Code& code);
+
   // Allocate and return an arguments descriptor.
   // Let 'num_names' be the length of 'optional_arguments_names'.
   // Treat the first 'num_arguments - num_names' arguments as positional and
@@ -129,7 +132,7 @@ NODE_LIST(DEFINE_VISITOR_FUNCTION)
   // structured.
   friend class OptimizingCodeGenerator;
 
-  // Forward Declarations.
+  // Forward declarations.
   class DescriptorList;
   class HandlerList;
 
@@ -223,7 +226,6 @@ NODE_LIST(DEFINE_VISITOR_FUNCTION)
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(CodeGenerator);
 };
-
 
 }  // namespace dart
 

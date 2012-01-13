@@ -39,37 +39,51 @@ class LocalScope;
     initializeHandle(this, value);                                             \
     ASSERT(IsNull() || Is##object());                                          \
   }                                                                            \
+  static object& Handle(Isolate* islt, Raw##object* raw_ptr) {                 \
+    object* obj = reinterpret_cast<object*>(VMHandles::AllocateHandle(islt));  \
+    initializeHandle(obj, raw_ptr);                                            \
+    return *obj;                                                               \
+  }                                                                            \
   static object& Handle() {                                                    \
-    return Handle(object::null());                                             \
+    return Handle(Isolate::Current(), object::null());                         \
   }                                                                            \
   static object& Handle(Raw##object* raw_ptr) {                                \
-    object* obj = reinterpret_cast<object*>(VMHandles::AllocateHandle());      \
+    return Handle(Isolate::Current(), raw_ptr);                                \
+  }                                                                            \
+  static object& CheckedHandle(Isolate* islt, RawObject* raw_ptr) {            \
+    object* obj = reinterpret_cast<object*>(VMHandles::AllocateHandle(islt));  \
     initializeHandle(obj, raw_ptr);                                            \
+    if (!obj->Is##object()) {                                                  \
+      FATAL("Handle check failed.");                                           \
+    }                                                                          \
     return *obj;                                                               \
   }                                                                            \
   static object& CheckedHandle(RawObject* raw_ptr) {                           \
-    object* obj = reinterpret_cast<object*>(VMHandles::AllocateHandle());      \
+    return CheckedHandle(Isolate::Current(), raw_ptr);                         \
+  }                                                                            \
+  static object& ZoneHandle(Isolate* isolate, Raw##object* raw_ptr) {          \
+    object* obj = reinterpret_cast<object*>(                                   \
+        VMHandles::AllocateZoneHandle(isolate));                               \
     initializeHandle(obj, raw_ptr);                                            \
-    if (!obj->Is##object()) {                                                  \
-      FATAL("Handle check failed.");                                           \
-    }                                                                          \
     return *obj;                                                               \
   }                                                                            \
   static object& ZoneHandle() {                                                \
-    return ZoneHandle(object::null());                                         \
+    return ZoneHandle(Isolate::Current(), object::null());                     \
   }                                                                            \
   static object& ZoneHandle(Raw##object* raw_ptr) {                            \
-    object* obj = reinterpret_cast<object*>(VMHandles::AllocateZoneHandle());  \
-    initializeHandle(obj, raw_ptr);                                            \
-    return *obj;                                                               \
+    return ZoneHandle(Isolate::Current(), raw_ptr);                            \
   }                                                                            \
-  static object& CheckedZoneHandle(RawObject* raw_ptr) {                       \
-    object* obj = reinterpret_cast<object*>(VMHandles::AllocateZoneHandle());  \
+  static object& CheckedZoneHandle(Isolate* isolate, RawObject* raw_ptr) {     \
+    object* obj = reinterpret_cast<object*>(                                   \
+        VMHandles::AllocateZoneHandle(isolate));                               \
     initializeHandle(obj, raw_ptr);                                            \
     if (!obj->Is##object()) {                                                  \
       FATAL("Handle check failed.");                                           \
     }                                                                          \
     return *obj;                                                               \
+  }                                                                            \
+  static object& CheckedZoneHandle(RawObject* raw_ptr) {                       \
+    return CheckedZoneHandle(Isolate::Current(), raw_ptr);                     \
   }                                                                            \
   static Raw##object* null() {                                                 \
     return reinterpret_cast<Raw##object*>(Object::null());                     \
@@ -138,10 +152,14 @@ class Object {
     kCodeClass,
     kInstructionsClass,
     kPcDescriptorsClass,
+    kLocalVarDescriptorsClass,
     kExceptionHandlersClass,
     kContextClass,
     kContextScopeClass,
     kApiErrorClass,
+    kLanguageErrorClass,
+    kUnhandledExceptionClass,
+    kUnwindErrorClass,
     kMaxId,
     kInvalidIndex = -1,
   };
@@ -151,9 +169,12 @@ class Object {
   RawObject* raw() const { return raw_; }
   void operator=(RawObject* value) { SetRaw(value); }
 
-  void set_tags(intptr_t tags) {
+  void set_tags(intptr_t value) {
+    // TODO(asiva): Remove the capability of setting tags in general. The mask
+    // here only allows for canonical and from_snapshot flags to be set.
     ASSERT(!IsNull());
-    raw()->ptr()->tags_ = tags;
+    uword tags = raw()->ptr()->tags_ & ~0x0000000c;
+    raw()->ptr()->tags_ = tags | (value & 0x0000000c);
   }
   void SetCreatedFromSnapshot() const {
     ASSERT(!IsNull());
@@ -198,24 +219,33 @@ CLASS_LIST_NO_OBJECT(DEFINE_CLASS_TESTER);
     return VMHandles::IsZoneHandle(reinterpret_cast<uword>(this));
   }
 
+  static Object& Handle(Isolate* isolate, RawObject* raw_ptr) {
+    Object* obj = reinterpret_cast<Object*>(VMHandles::AllocateHandle(isolate));
+    obj->SetRaw(raw_ptr);
+    return *obj;
+  }
+
   static Object& Handle() {
-    return Handle(null_);
+    return Handle(Isolate::Current(), null_);
   }
 
   static Object& Handle(RawObject* raw_ptr) {
-    Object* obj = reinterpret_cast<Object*>(VMHandles::AllocateHandle());
+    return Handle(Isolate::Current(), raw_ptr);
+  }
+
+  static Object& ZoneHandle(Isolate* isolate, RawObject* raw_ptr) {
+    Object* obj = reinterpret_cast<Object*>(
+        VMHandles::AllocateZoneHandle(isolate));
     obj->SetRaw(raw_ptr);
     return *obj;
   }
 
   static Object& ZoneHandle() {
-    return ZoneHandle(null_);
+    return ZoneHandle(Isolate::Current(), null_);
   }
 
   static Object& ZoneHandle(RawObject* raw_ptr) {
-    Object* obj = reinterpret_cast<Object*>(VMHandles::AllocateZoneHandle());
-    obj->SetRaw(raw_ptr);
-    return *obj;
+    return ZoneHandle(Isolate::Current(), raw_ptr);
   }
 
   static RawObject* null() { return null_; }
@@ -256,12 +286,18 @@ CLASS_LIST_NO_OBJECT(DEFINE_CLASS_TESTER);
   static RawClass* code_class() { return code_class_; }
   static RawClass* instructions_class() { return instructions_class_; }
   static RawClass* pc_descriptors_class() { return pc_descriptors_class_; }
+  static RawClass* var_descriptors_class() { return var_descriptors_class_; }
   static RawClass* exception_handlers_class() {
     return exception_handlers_class_;
   }
   static RawClass* context_class() { return context_class_; }
   static RawClass* context_scope_class() { return context_scope_class_; }
   static RawClass* api_error_class() { return api_error_class_; }
+  static RawClass* language_error_class() { return language_error_class_; }
+  static RawClass* unhandled_exception_class() {
+    return unhandled_exception_class_;
+  }
+  static RawClass* unwind_error_class() { return unwind_error_class_; }
 
   static int GetSingletonClassIndex(const RawClass* raw_class);
   static RawClass* GetSingletonClass(int index);
@@ -316,7 +352,7 @@ CLASS_LIST_NO_OBJECT(DEFINE_CLASS_TESTER);
     // TODO(iposva): Implement real store barrier here.
     *addr = value;
     // Filter stores based on source and target.
-    if (raw()->IsOldObject() && value->IsNewObject()) {
+    if (value->IsNewObject() && raw()->IsOldObject()) {
       uword ptr = reinterpret_cast<uword>(addr);
       Isolate::Current()->store_buffer()->AddPointer(ptr);
     }
@@ -361,13 +397,16 @@ CLASS_LIST_NO_OBJECT(DEFINE_CLASS_TESTER);
   static RawClass* code_class_;  // Class of the Code vm object.
   static RawClass* instructions_class_;  // Class of the Instructions vm object.
   static RawClass* pc_descriptors_class_;  // Class of PcDescriptors vm object.
+  static RawClass* var_descriptors_class_;  // Class of LocalVarDescriptors.
   static RawClass* exception_handlers_class_;  // Class of ExceptionHandlers.
   static RawClass* context_class_;  // Class of the Context vm object.
   static RawClass* context_scope_class_;  // Class of ContextScope vm object.
   static RawClass* api_error_class_;  // Class of ApiError.
+  static RawClass* language_error_class_;  // Class of LanguageError.
+  static RawClass* unhandled_exception_class_;  // Class of UnhandledException.
+  static RawClass* unwind_error_class_;  // Class of UnwindError.
 
-  friend class Class;
-  friend class SnapshotReader;
+  friend void RawObject::Validate() const;
 
   // Disallow allocation.
   void* operator new(size_t size);
@@ -1742,6 +1781,43 @@ class Instructions : public Object {
 };
 
 
+class LocalVarDescriptors : public Object {
+ public:
+  intptr_t Length() const;
+
+  RawString* GetName(intptr_t var_index) const;
+  void GetScopeInfo(intptr_t var_index,
+                    intptr_t* scope_id,
+                    intptr_t* begin_token_pos,
+                    intptr_t* end_token_pos) const;
+  intptr_t GetSlotIndex(intptr_t var_index) const;
+
+  void SetVar(intptr_t var_index,
+              const String& name,
+              intptr_t stack_slot,
+              intptr_t scope_id,
+              intptr_t begin_pos,
+              intptr_t end_pos) const;
+
+  static intptr_t InstanceSize() {
+    ASSERT(sizeof(RawLocalVarDescriptors) ==
+        OFFSET_OF(RawLocalVarDescriptors, data_));
+    return 0;
+  }
+  static intptr_t InstanceSize(intptr_t len) {
+    return RoundedAllocationSize(
+        sizeof(RawLocalVarDescriptors) +
+        (len * sizeof(RawLocalVarDescriptors::VarInfo)));
+  }
+
+  static RawLocalVarDescriptors* New(intptr_t num_variables);
+
+ private:
+  HEAP_OBJECT_IMPLEMENTATION(LocalVarDescriptors, Object);
+  friend class Class;
+};
+
+
 class PcDescriptors : public Object {
  public:
   enum Kind {
@@ -1904,6 +1980,13 @@ class Code : public Object {
   }
   void set_pc_descriptors(const PcDescriptors& descriptors) const {
     StorePointer(&raw_ptr()->pc_descriptors_, descriptors.raw());
+  }
+
+  RawLocalVarDescriptors* var_descriptors() const {
+    return raw_ptr()->var_descriptors_;
+  }
+  void set_var_descriptors(const LocalVarDescriptors& value) const {
+    StorePointer(&raw_ptr()->var_descriptors_, value.raw());
   }
 
   // See class ICData for interpretation of the 'ic_data_' array.
@@ -2105,7 +2188,64 @@ class ContextScope : public Object {
 };
 
 
-class UnhandledException : public Object {
+class Error : public Object {
+ public:
+  virtual const char* ToErrorCString() const;
+
+ private:
+  HEAP_OBJECT_IMPLEMENTATION(Error, Object);
+};
+
+
+class ApiError : public Error {
+ public:
+  RawString* message() const { return raw_ptr()->message_; }
+  static intptr_t message_offset() {
+    return OFFSET_OF(RawApiError, message_);
+  }
+
+  static intptr_t InstanceSize() {
+    return RoundedAllocationSize(sizeof(RawApiError));
+  }
+
+  static RawApiError* New(const String& message,
+                          Heap::Space space = Heap::kNew);
+
+  virtual const char* ToErrorCString() const;
+
+ private:
+  void set_message(const String& message) const;
+
+  HEAP_OBJECT_IMPLEMENTATION(ApiError, Error);
+  friend class Class;
+};
+
+
+class LanguageError : public Error {
+ public:
+  RawString* message() const { return raw_ptr()->message_; }
+  static intptr_t message_offset() {
+    return OFFSET_OF(RawLanguageError, message_);
+  }
+
+  static intptr_t InstanceSize() {
+    return RoundedAllocationSize(sizeof(RawLanguageError));
+  }
+
+  static RawLanguageError* New(const String& message,
+                               Heap::Space space = Heap::kNew);
+
+  virtual const char* ToErrorCString() const;
+
+ private:
+  void set_message(const String& message) const;
+
+  HEAP_OBJECT_IMPLEMENTATION(LanguageError, Error);
+  friend class Class;
+};
+
+
+class UnhandledException : public Error {
  public:
   RawInstance* exception() const { return raw_ptr()->exception_; }
   static intptr_t exception_offset() {
@@ -2125,36 +2265,37 @@ class UnhandledException : public Object {
                                     const Instance& stacktrace,
                                     Heap::Space space = Heap::kNew);
 
+  virtual const char* ToErrorCString() const;
+
  private:
   void set_exception(const Instance& exception) const;
   void set_stacktrace(const Instance& stacktrace) const;
 
-  HEAP_OBJECT_IMPLEMENTATION(UnhandledException, Object);
+  HEAP_OBJECT_IMPLEMENTATION(UnhandledException, Error);
   friend class Class;
 };
 
 
-class ApiError : public Object {
+class UnwindError : public Error {
  public:
-  RawObject* data() const { return raw_ptr()->data_; }
-  static intptr_t data_offset() {
-    return OFFSET_OF(RawApiError, data_);
+  RawString* message() const { return raw_ptr()->message_; }
+  static intptr_t message_offset() {
+    return OFFSET_OF(RawUnwindError, message_);
   }
 
   static intptr_t InstanceSize() {
-    return RoundedAllocationSize(sizeof(RawApiError));
+    return RoundedAllocationSize(sizeof(RawUnwindError));
   }
 
-  static RawApiError* New(const String& message,
-                          Heap::Space space = Heap::kNew);
+  static RawUnwindError* New(const String& message,
+                             Heap::Space space = Heap::kNew);
 
-  static RawApiError* New(const UnhandledException& exception,
-                          Heap::Space space = Heap::kNew);
+  virtual const char* ToErrorCString() const;
 
  private:
-  void set_data(const Object& data) const;
+  void set_message(const String& message) const;
 
-  HEAP_OBJECT_IMPLEMENTATION(ApiError, Object);
+  HEAP_OBJECT_IMPLEMENTATION(UnwindError, Error);
   friend class Class;
 };
 
@@ -2171,7 +2312,7 @@ class Instance : public Object {
   }
 
   void SetField(const Field& field, const Object& value) const {
-    *FieldAddr(field) = value.raw();
+    StorePointer(FieldAddr(field), value.raw());
   }
 
   RawType* GetType() const;
@@ -2222,7 +2363,7 @@ class Instance : public Object {
                                        + sizeof(RawObject));
   }
   void SetFieldAtOffset(intptr_t offset, const Object& value) const {
-    *FieldAddrAtOffset(offset) = value.raw();
+    StorePointer(FieldAddrAtOffset(offset), value.raw());
   }
   bool IsValidFieldOffset(int offset) const;
 
@@ -2951,7 +3092,7 @@ class Array : public Instance {
   }
   void SetAt(intptr_t index, const Object& value) const {
     // TODO(iposva): Add storing NoGCScope.
-    *ObjectAddr(index) = value.raw();
+    StorePointer(ObjectAddr(index), value.raw());
   }
 
   virtual RawAbstractTypeArguments* GetTypeArguments() const {
@@ -3121,7 +3262,7 @@ class Closure : public Instance {
   // TODO(iposva): Remove smrck support once mapping to arbitrary is available.
   RawInteger* smrck() const { return raw_ptr()->smrck_; }
   void set_smrck(const Integer& smrck) const {
-    raw_ptr()->smrck_ = smrck.raw();
+    StorePointer(&raw_ptr()->smrck_, smrck.raw());
   }
   static intptr_t smrck_offset() { return OFFSET_OF(RawClosure, smrck_); }
 

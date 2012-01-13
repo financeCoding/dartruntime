@@ -80,7 +80,7 @@ class PageSpace {
   bool IsValidAddress(uword addr) const {
     return Contains(addr);
   }
-  static intptr_t IsPageAllocatableSize(intptr_t size) {
+  static bool IsPageAllocatableSize(intptr_t size) {
     return size <= kAllocatablePageSize;
   }
 
@@ -101,6 +101,12 @@ class PageSpace {
   HeapPage* AllocateLargePage(intptr_t size);
   void FreeLargePage(HeapPage* page, HeapPage* previous_page);
   void FreePages(HeapPage* pages);
+
+  static intptr_t LargePageSizeFor(intptr_t size);
+  bool CanIncreaseCapacity(intptr_t increase) {
+    ASSERT(capacity_ <= max_capacity_);
+    return increase <= (max_capacity_ - capacity_);
+  }
 
   uword TryBumpAllocate(intptr_t size);
 

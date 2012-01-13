@@ -43,7 +43,7 @@ static void GenerateCallRuntimeStub(Assembler* assembler) {
   __ movl(EAX, FieldAddress(CTX, Context::isolate_offset()));
 
   // Save exit frame information to enable stack walking as we are about
-  // to transition to dart VM code.
+  // to transition to Dart VM C++ code.
   __ movl(Address(EAX, Isolate::top_exit_frame_info_offset()), ESP);
 
   // Save current Context pointer into Isolate structure.
@@ -78,7 +78,7 @@ static void GenerateCallRuntimeStub(Assembler* assembler) {
       Immediate(reinterpret_cast<intptr_t>(Object::null()));
   __ movl(Address(CTX, Isolate::top_context_offset()), raw_null);
 
-  // Cache Context pointer into CTX while executing dart code.
+  // Cache Context pointer into CTX while executing Dart code.
   __ movl(CTX, ECX);
 
   __ LeaveFrame();
@@ -109,6 +109,46 @@ void StubCode::GenerateDartCallToRuntimeStub(Assembler* assembler) {
 // Must preserve callee saved registers EDI and EBX.
 void StubCode::GenerateStubCallToRuntimeStub(Assembler* assembler) {
   GenerateCallRuntimeStub(assembler);
+}
+
+
+// Print the stop message.
+static void PrintStopMessage(const char* message) {
+  OS::Print("Stop message: %s\n", message);
+}
+
+
+// Input parameters:
+//   ESP : points to return address.
+//   EAX : stop message (const char*).
+// Must preserve all registers, except EAX.
+void StubCode::GeneratePrintStopMessageStub(Assembler* assembler) {
+  // Preserve caller-saved registers.
+  __ pushl(ECX);
+  __ pushl(EDX);
+
+  __ EnterFrame(0);
+
+  // Reserve space for the native argument and align frame before entering
+  // the C++ world.
+  __ AddImmediate(ESP, Immediate(-sizeof(kWordSize)));
+  if (OS::ActivationFrameAlignment() > 0) {
+    __ andl(ESP, Immediate(~(OS::ActivationFrameAlignment() - 1)));
+  }
+
+  // Pass argument and call native function.
+  __ movl(Address(ESP, 0), EAX);
+  __ movl(EAX, Immediate(reinterpret_cast<uword>(&PrintStopMessage)));
+  __ call(EAX);
+  __ popl(EAX);
+
+  __ LeaveFrame();
+
+  // Restore caller-saved registers.
+  __ popl(EDX);
+  __ popl(ECX);
+
+  __ ret();
 }
 
 
@@ -154,7 +194,7 @@ void StubCode::GenerateCallNativeCFunctionStub(Assembler* assembler) {
     __ andl(ESP, Immediate(~(OS::ActivationFrameAlignment() - 1)));
   }
 
-  // Pass NativeArguments structure by value and call runtime.
+  // Pass NativeArguments structure by value and call native function.
   __ movl(Address(ESP, isolate_offset), CTX);  // Set isolate in NativeArgs.
   __ movl(Address(ESP, argc_offset), EDX);  // Set argc in NativeArguments.
   __ movl(Address(ESP, argv_offset), EAX);  // Set argv in NativeArguments.
@@ -175,7 +215,7 @@ void StubCode::GenerateCallNativeCFunctionStub(Assembler* assembler) {
       Immediate(reinterpret_cast<intptr_t>(Object::null()));
   __ movl(Address(CTX, Isolate::top_context_offset()), raw_null);
 
-  // Cache Context pointer into CTX while executing dart code.
+  // Cache Context pointer into CTX while executing Dart code.
   __ movl(CTX, EDI);
 
   __ LeaveFrame();
@@ -420,8 +460,7 @@ void StubCode::GenerateMegamorphicLookupStub(Assembler* assembler) {
   __ pushl(ECX);  // Preserve ic-data array.
   // First resolve the function to get the function object.
 
-  // Setup space for return value on stack by pushing smi 0.
-  __ pushl(Immediate(0));
+  __ pushl(raw_null);  // Setup space on stack for return value.
   __ pushl(EAX);  // Push receiver.
   __ CallRuntimeFromStub(kResolveCompileInstanceFunctionRuntimeEntry);
   __ popl(EAX);  // Remove receiver pushed earlier.
@@ -456,7 +495,7 @@ void StubCode::GenerateMegamorphicLookupStub(Assembler* assembler) {
   __ pushl(EDX);  // Preserve ic-data array.
   __ pushl(EDI);  // Preserve arguments descriptor array.
 
-  __ pushl(Immediate(0));
+  __ pushl(raw_null);  // Setup space on stack for return value.
   __ pushl(EAX);  // Push receiver.
   __ pushl(EDX);  // Ic-data array.
   __ CallRuntimeFromStub(kResolveImplicitClosureFunctionRuntimeEntry);
@@ -491,7 +530,7 @@ void StubCode::GenerateMegamorphicLookupStub(Assembler* assembler) {
   __ pushl(EDX);  // Preserve ic-data array.
   __ pushl(EDI);  // Preserve arguments descriptor array.
 
-  __ pushl(Immediate(0));
+  __ pushl(raw_null);  // Setup space on stack for return value.
   __ pushl(EAX);  // Push receiver.
   __ pushl(EDX);  // Ic-data array.
   __ CallRuntimeFromStub(kResolveImplicitClosureThroughGetterRuntimeEntry);
@@ -510,7 +549,7 @@ void StubCode::GenerateMegamorphicLookupStub(Assembler* assembler) {
 
   // ECX: Closure object.
   // EDI: Arguments descriptor array.
-  __ pushl(Immediate(0));  // Result from invoking Closure.
+  __ pushl(raw_null);  // Setup space on stack for result from invoking Closure.
   __ pushl(ECX);  // Closure object.
   __ pushl(EDI);  // Arguments descriptor.
   __ movl(EDI, FieldAddress(EDI, Array::data_offset()));
@@ -546,8 +585,7 @@ void StubCode::GenerateMegamorphicLookupStub(Assembler* assembler) {
   //   ECX: raw_null.
   //   EDI: argument descriptor array.
 
-  // Setup space for return value on stack by pushing smi 0.
-  __ pushl(Immediate(0));  // Result from noSuchMethod.
+  __ pushl(raw_null);  // Setup space on stack for result from noSuchMethod.
   __ pushl(EAX);  // Receiver.
   __ pushl(EDX);  // IC-data array.
   __ pushl(EDI);  // Argument descriptor array.
@@ -602,8 +640,7 @@ void StubCode::GenerateDeoptimizeStub(Assembler* assembler) {
 //   EDX : Array length as Smi.
 //   ECX : array element type (either NULL or an instantiated type).
 // Uses EAX, EBX, ECX, EDI  as temporary registers.
-// NOTE: EDX cannot be cloberred here as the caller relies on it
-// being saved.
+// NOTE: EDX cannot be clobbered here as the caller relies on it being saved.
 // The newly allocated object is returned in EAX.
 void StubCode::GenerateAllocateArrayStub(Assembler* assembler) {
   Label slow_case;
@@ -632,7 +669,7 @@ void StubCode::GenerateAllocateArrayStub(Assembler* assembler) {
     // EDI: Points to new space object.
     __ movl(EAX, Address(EDI, Scavenger::top_offset()));
     intptr_t fixed_size = sizeof(RawArray) + kObjectAlignment - 1;
-    __ leal(EBX, Address(EDX, TIMES_2, fixed_size));
+    __ leal(EBX, Address(EDX, TIMES_2, fixed_size));  // EDX is Smi.
     ASSERT(kSmiTagShift == 1);
     __ andl(EBX, Immediate(-kObjectAlignment));
     __ leal(EBX, Address(EAX, EBX, TIMES_1, 0));
@@ -650,6 +687,7 @@ void StubCode::GenerateAllocateArrayStub(Assembler* assembler) {
     // next object start and initialize the object.
     // EAX: potential new object start.
     // EBX: potential next object start.
+    // EDX: Array length as Smi.
     // EDI: Points to new space object.
     __ movl(Address(EDI, Scavenger::top_offset()), EBX);
     __ addl(EAX, Immediate(kHeapObjectTag));
@@ -660,24 +698,52 @@ void StubCode::GenerateAllocateArrayStub(Assembler* assembler) {
     // EDX: Array length as Smi.
 
     // Store the type argument field.
-    __ movl(FieldAddress(EAX, Array::type_arguments_offset()), ECX);
+    __ StoreIntoObject(EAX,
+                       FieldAddress(EAX, Array::type_arguments_offset()),
+                       ECX);
 
     // Set the length field.
-    __ movl(FieldAddress(EAX, Array::length_offset()), EDX);
+    __ StoreIntoObject(EAX,
+                       FieldAddress(EAX, Array::length_offset()),
+                       EDX);
 
+    // EAX: new object start as a tagged pointer.
+    // EBX: new object end address.
+    // EDX: Array length as Smi.
     // Store class value for array.
     __ movl(ECX, FieldAddress(CTX, Context::isolate_offset()));
     __ movl(ECX, Address(ECX, Isolate::object_store_offset()));
     __ movl(ECX, Address(ECX, ObjectStore::array_class_offset()));
-    __ movl(FieldAddress(EAX, Array::class_offset()), ECX);
-    __ movl(FieldAddress(EAX, Array::tags_offset()), Immediate(0));  // Tags.
+    __ StoreIntoObject(EAX,
+                       FieldAddress(EAX, Array::class_offset()),
+                       ECX);
+    // Calculate the size tag.
+    // EAX: new object start as a tagged pointer.
+    // EBX: new object end address.
+    // EDX: Array length as Smi.
+    {
+      Label size_tag_overflow, done;
+      __ leal(ECX, Address(EDX, TIMES_2, fixed_size));  // EDX is Smi.
+      ASSERT(kSmiTagShift == 1);
+      __ andl(ECX, Immediate(-kObjectAlignment));
+      __ cmpl(ECX, Immediate(RawObject::SizeTag::kMaxSizeTag));
+      __ j(ABOVE, &size_tag_overflow, Assembler::kNearJump);
+      __ shll(ECX, Immediate(RawObject::kSizeTagBit - kObjectAlignmentLog2));
+      __ movl(FieldAddress(EAX, Array::tags_offset()), ECX);
+      __ jmp(&done);
+
+      __ Bind(&size_tag_overflow);
+      __ movl(FieldAddress(EAX, Array::tags_offset()), Immediate(0));
+      __ Bind(&done);
+    }
 
     // Initialize all array elements to raw_null.
     // EAX: new object start as a tagged pointer.
     // EBX: new object end address.
+    // EDX: Array length as Smi.
+    __ leal(ECX, FieldAddress(EAX, Array::data_offset()));
     // ECX: iterator which initially points to the start of the variable
     // data area to be initialized.
-    __ leal(ECX, FieldAddress(EAX, Array::data_offset()));
     Label done;
     Label init_loop;
     __ Bind(&init_loop);
@@ -690,6 +756,7 @@ void StubCode::GenerateAllocateArrayStub(Assembler* assembler) {
 
     // Done allocating and initializing the array.
     // EAX: new object.
+    // EDX: Array length as Smi (preserved for the caller.)
     __ ret();
   }
 
@@ -697,7 +764,7 @@ void StubCode::GenerateAllocateArrayStub(Assembler* assembler) {
   // into the runtime.
   __ Bind(&slow_case);
   __ EnterFrame(0);
-  __ pushl(raw_null);  // Push Null object for return value.
+  __ pushl(raw_null);  // Setup space on stack for return value.
   __ pushl(EDX);  // Array length as Smi.
   __ pushl(ECX);  // Element type.
   __ pushl(raw_null);  // Null instantiator.
@@ -789,8 +856,7 @@ void StubCode::GenerateCallClosureFunctionStub(Assembler* assembler) {
   // calling into the runtime.
   __ EnterFrame(0);
 
-  // Setup space for return value on stack by pushing smi 0.
-  __ pushl(Immediate(0));  // Result from reporting the error.
+  __ pushl(raw_null);  // Setup space on stack for result from error reporting.
   __ pushl(EDI);  // Non-closure object.
     // Total number of args is the first Smi in args descriptor array (EDX).
   __ movl(EDI, FieldAddress(EDX, Array::data_offset()));  // Load num_args.
@@ -933,6 +999,8 @@ void StubCode::GenerateInvokeDartCodeStub(Assembler* assembler) {
 // EAX: new allocated RawContext object.
 // EBX and EDX are destroyed.
 void StubCode::GenerateAllocateContextStub(Assembler* assembler) {
+  const Immediate raw_null =
+      Immediate(reinterpret_cast<intptr_t>(Object::null()));
   if (FLAG_inline_alloc) {
     const Class& context_class = Class::ZoneHandle(Object::context_class());
     Label slow_case;
@@ -970,12 +1038,31 @@ void StubCode::GenerateAllocateContextStub(Assembler* assembler) {
     // EAX: new object.
     // EDX: number of context variables.
     __ LoadObject(EBX, context_class);  // Load up class field of context.
-    __ movl(FieldAddress(EAX, Context::class_offset()), EBX);
-    __ movl(FieldAddress(EAX, Context::tags_offset()), Immediate(0));  // Tags.
+    __ StoreIntoObject(EAX,
+                       FieldAddress(EAX, Context::class_offset()),
+                       EBX);
+    // Calculate the size tag.
+    // EAX: new object.
+    // EDX: number of context variables.
+    {
+      Label size_tag_overflow, done;
+      __ leal(EBX, Address(EDX, TIMES_4, fixed_size));
+      __ andl(EBX, Immediate(-kObjectAlignment));
+      __ cmpl(EBX, Immediate(RawObject::SizeTag::kMaxSizeTag));
+      __ j(ABOVE, &size_tag_overflow, Assembler::kNearJump);
+      __ shll(EBX, Immediate(RawObject::kSizeTagBit - kObjectAlignmentLog2));
+      __ movl(FieldAddress(EAX, Context::tags_offset()), EBX);  // Tags.
+      __ jmp(&done);
+
+      __ Bind(&size_tag_overflow);
+      // Set overflow size tag value.
+      __ movl(FieldAddress(EAX, Context::tags_offset()), Immediate(0));
+      __ Bind(&done);
+    }
 
     // Setup up number of context variables field.
     // EAX: new object.
-    // EDX: number of context variables.
+    // EDX: number of context variables as integer value (not object).
     __ movl(FieldAddress(EAX, Context::num_variables_offset()), EDX);
 
     // Setup isolate field.
@@ -983,6 +1070,7 @@ void StubCode::GenerateAllocateContextStub(Assembler* assembler) {
     // EAX: new object.
     // EDX: number of context variables.
     __ movl(EBX, FieldAddress(CTX, Context::isolate_offset()));
+    // EBX: Isolate, not an object.
     __ movl(FieldAddress(EAX, Context::isolate_offset()), EBX);
 
     const Immediate raw_null =
@@ -1016,8 +1104,7 @@ void StubCode::GenerateAllocateContextStub(Assembler* assembler) {
   }
   // Create a stub frame.
   __ EnterFrame(0);
-  const Context& new_context = Context::ZoneHandle();
-  __ PushObject(new_context);  // Push Null context for return value.
+  __ pushl(raw_null);  // Setup space on stack for return value.
   __ SmiTag(EDX);
   __ pushl(EDX);
   __ CallRuntimeFromStub(kAllocateContextRuntimeEntry);  // Allocate context.
@@ -1105,7 +1192,9 @@ void StubCode::GenerateAllocationStubForClass(Assembler* assembler,
       __ LoadObject(EDX,
           Class::ZoneHandle(Object::instantiated_type_arguments_class()));
       __ movl(Address(ECX, Instance::class_offset()), EDX);  // Set its class.
-      __ movl(Address(ECX, Instance::tags_offset()), Immediate(0));  // Tags.
+      // Set the tags.
+      __ movl(Address(ECX, Instance::tags_offset()),
+              Immediate(RawObject::SizeTag::encode(type_args_size)));
       // Set the new InstantiatedTypeArguments object (ECX) as the type
       // arguments (EDI) of the new object (EAX).
       __ movl(EDI, ECX);
@@ -1123,7 +1212,9 @@ void StubCode::GenerateAllocationStubForClass(Assembler* assembler,
     // EDI: new object type arguments (if is_cls_parameterized).
     __ LoadObject(EDX, cls);  // Load class of object to be allocated.
     __ movl(Address(EAX, Instance::class_offset()), EDX);
-    __ movl(Address(EAX, Instance::tags_offset()), Immediate(0));  // Tags.
+    // Set the tags.
+    __ movl(Address(EAX, Instance::tags_offset()),
+            Immediate(RawObject::SizeTag::encode(instance_size)));
 
     // Initialize the remaining words of the object.
     const Immediate raw_null =
@@ -1197,8 +1288,7 @@ void StubCode::GenerateAllocationStubForClass(Assembler* assembler,
   }
   // Create a stub frame.
   __ EnterFrame(0);
-  const Object& new_object = Object::ZoneHandle();
-  __ PushObject(new_object);  // Push Null object for return value.
+  __ pushl(raw_null);  // Setup space on stack for return value.
   __ PushObject(cls);  // Push class of object to be allocated.
   if (is_cls_parameterized) {
     __ pushl(EAX);  // Push type arguments of object to be allocated.
@@ -1272,7 +1362,9 @@ void StubCode::GenerateAllocationStubForClosure(Assembler* assembler,
     // ECX: new context object (only if is_implicit_closure).
     __ LoadObject(EDX, cls);  // Load signature class of closure.
     __ movl(Address(EAX, Closure::class_offset()), EDX);
-    __ movl(Address(EAX, Closure::tags_offset()), Immediate(0));  // Tags.
+    // Set the tags.
+    __ movl(Address(EAX, Closure::tags_offset()),
+            Immediate(RawObject::SizeTag::encode(closure_size)));
 
     // Initialize the function field in the object.
     // EAX: new closure object.
@@ -1295,7 +1387,9 @@ void StubCode::GenerateAllocationStubForClosure(Assembler* assembler,
       // Set the class field to the Context class.
       __ LoadObject(EBX, Class::ZoneHandle(Object::context_class()));
       __ movl(Address(ECX, Context::class_offset()), EBX);
-      __ movl(Address(ECX, Context::tags_offset()), Immediate(0));  // Tags.
+      // Set the tags.
+      __ movl(Address(ECX, Context::tags_offset()),
+              Immediate(RawObject::SizeTag::encode(context_size)));
 
       // Set number of variables field to 1 (for captured receiver).
       __ movl(Address(ECX, Context::num_variables_offset()), Immediate(1));
@@ -1346,8 +1440,7 @@ void StubCode::GenerateAllocationStubForClosure(Assembler* assembler,
   }
   // Create a stub frame.
   __ EnterFrame(0);
-  const Closure& new_closure = Closure::ZoneHandle();
-  __ PushObject(new_closure);  // Push Null closure for return value.
+  __ pushl(raw_null);  // Setup space on stack for return value.
   __ PushObject(func);
   if (is_implicit_static_closure) {
     __ CallRuntimeFromStub(kAllocateImplicitStaticClosureRuntimeEntry);
@@ -1400,13 +1493,14 @@ void StubCode::GenerateCallNoSuchMethodFunctionStub(Assembler* assembler) {
   // noSuchMethod(InvocationMirror call).
   // Also, the class NoSuchMethodException has to be modified accordingly.
   // Total number of args is the first Smi in args descriptor array (EDX).
+  const Immediate raw_null =
+      Immediate(reinterpret_cast<intptr_t>(Object::null()));
   __ movl(EDI, FieldAddress(EDX, Array::data_offset()));
   __ SmiUntag(EDI);
   __ movl(EAX, Address(EBP, EDI, TIMES_4, kWordSize));  // Get receiver.
 
   __ EnterFrame(0);
-  // Setup space for return value on stack by pushing smi 0.
-  __ pushl(Immediate(0));  // Result from noSuchMethod.
+  __ pushl(raw_null);  // Setup space on stack for result from noSuchMethod.
   __ pushl(EAX);  // Receiver.
   __ pushl(ECX);  // IC data array.
   __ pushl(EDX);  // Arguments descriptor array.
@@ -1457,7 +1551,7 @@ void StubCode::GenerateNArgsCheckInlineCacheStub(Assembler* assembler,
   ASSERT(num_args > 0);
   // Get receiver.
   __ movl(EAX, FieldAddress(EDX, Array::data_offset()));
-  __ movl(EAX, Address(ESP, EAX, TIMES_2, 0));
+  __ movl(EAX, Address(ESP, EAX, TIMES_2, 0));  // EAX is Smi.
 
   Label get_class, ic_miss;
   __ call(&get_class);
@@ -1501,7 +1595,7 @@ void StubCode::GenerateNArgsCheckInlineCacheStub(Assembler* assembler,
     __ movl(EDI, Address(EBX, 0));  // Get class from IC data to check.
     // Get receiver.
     __ movl(EAX, FieldAddress(EDX, Array::data_offset()));
-    __ movl(EAX, Address(ESP, EAX, TIMES_2, 0));
+    __ movl(EAX, Address(ESP, EAX, TIMES_2, 0));  // EAX is Smi.
     __ call(&get_class);
     __ cmpl(EAX, EDI);  // Match?
     __ j(NOT_EQUAL, &no_match, Assembler::kNearJump);
@@ -1509,12 +1603,12 @@ void StubCode::GenerateNArgsCheckInlineCacheStub(Assembler* assembler,
     __ movl(EDI, Address(EBX, kWordSize));  // Get class from IC data to check.
     // Get next argument.
     __ movl(EAX, FieldAddress(EDX, Array::data_offset()));
-    __ movl(EAX, Address(ESP, EAX, TIMES_2, -kWordSize));
+    __ movl(EAX, Address(ESP, EAX, TIMES_2, -kWordSize));  // EAX is Smi.
     __ call(&get_class);
     __ cmpl(EAX, EDI);  // Match?
     __ j(EQUAL, &found, Assembler::kNearJump);
     __ Bind(&no_match);
-    __ addl(EBX, Immediate(kWordSize * 1 + (num_args)));  // Next element.
+    __ addl(EBX, Immediate(kWordSize * (1 + num_args)));  // Next element.
     __ cmpl(EDI, raw_null);   // Done?
     __ j(NOT_EQUAL, &loop, Assembler::kNearJump);
   }
@@ -1522,12 +1616,11 @@ void StubCode::GenerateNArgsCheckInlineCacheStub(Assembler* assembler,
   __ Bind(&ic_miss);
   // Get receiver, again.
   __ movl(EAX, FieldAddress(EDX, Array::data_offset()));
-  __ leal(EAX, Address(ESP, EAX, TIMES_2, 0));
+  __ leal(EAX, Address(ESP, EAX, TIMES_2, 0));  // EAX is Smi.
   __ EnterFrame(0);
-  // Setup space for return value on stack by pushing smi 0.
   __ pushl(EDX);  // Preserve arguments array.
   __ pushl(ECX);  // Preserve IC data array
-  __ pushl(Immediate(0));  // Space for result (target code object).
+  __ pushl(raw_null);  // Setup space on stack for result (target code object).
   __ movl(EDX, FieldAddress(EDX, Array::data_offset()));
   // Push call arguments.
   for (intptr_t i = 0; i < num_args; i++) {

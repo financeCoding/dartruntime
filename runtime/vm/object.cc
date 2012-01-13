@@ -15,7 +15,9 @@
 #include "vm/compiler_stats.h"
 #include "vm/class_finalizer.h"
 #include "vm/dart.h"
+#include "vm/dart_entry.h"
 #include "vm/debuginfo.h"
+#include "vm/exceptions.h"
 #include "vm/growable_array.h"
 #include "vm/heap.h"
 #include "vm/ic_data.h"
@@ -68,11 +70,17 @@ RawClass* Object::library_prefix_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
 RawClass* Object::code_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
 RawClass* Object::instructions_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
 RawClass* Object::pc_descriptors_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
+RawClass* Object::var_descriptors_class_ =
+    reinterpret_cast<RawClass*>(RAW_NULL);
 RawClass* Object::exception_handlers_class_ =
     reinterpret_cast<RawClass*>(RAW_NULL);
 RawClass* Object::context_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
 RawClass* Object::context_scope_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
 RawClass* Object::api_error_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
+RawClass* Object::language_error_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
+RawClass* Object::unhandled_exception_class_ =
+    reinterpret_cast<RawClass*>(RAW_NULL);
+RawClass* Object::unwind_error_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
 #undef RAW_NULL
 
 int Object::GetSingletonClassIndex(const RawClass* raw_class) {
@@ -117,6 +125,8 @@ int Object::GetSingletonClassIndex(const RawClass* raw_class) {
     return kInstructionsClass;
   } else if (raw_class == pc_descriptors_class()) {
     return kPcDescriptorsClass;
+  } else if (raw_class == var_descriptors_class()) {
+    return kLocalVarDescriptorsClass;
   } else if (raw_class == exception_handlers_class()) {
     return kExceptionHandlersClass;
   } else if (raw_class == context_class()) {
@@ -125,6 +135,12 @@ int Object::GetSingletonClassIndex(const RawClass* raw_class) {
     return kContextScopeClass;
   } else if (raw_class == api_error_class()) {
     return kApiErrorClass;
+  } else if (raw_class == language_error_class()) {
+    return kLanguageErrorClass;
+  } else if (raw_class == unhandled_exception_class()) {
+    return kUnhandledExceptionClass;
+  } else if (raw_class == unwind_error_class()) {
+    return kUnwindErrorClass;
   }
   return kInvalidIndex;
 }
@@ -153,10 +169,14 @@ RawClass* Object::GetSingletonClass(int index) {
     case kCodeClass: return code_class();
     case kInstructionsClass: return instructions_class();
     case kPcDescriptorsClass: return pc_descriptors_class();
+    case kLocalVarDescriptorsClass: return var_descriptors_class();
     case kExceptionHandlersClass: return exception_handlers_class();
     case kContextClass: return context_class();
     case kContextScopeClass: return context_scope_class();
     case kApiErrorClass: return api_error_class();
+    case kLanguageErrorClass: return language_error_class();
+    case kUnhandledExceptionClass: return unhandled_exception_class();
+    case kUnwindErrorClass: return unwind_error_class();
     default: break;
   }
   UNREACHABLE();
@@ -186,10 +206,14 @@ const char* Object::GetSingletonClassName(int index) {
     case kCodeClass: return "Code";
     case kInstructionsClass: return "Instructions";
     case kPcDescriptorsClass: return "PcDescriptors";
+    case kLocalVarDescriptorsClass: return "LocalVarDescriptors";
     case kExceptionHandlersClass: return "ExceptionHandlers";
     case kContextClass: return "Context";
     case kContextScopeClass: return "ContextScope";
     case kApiErrorClass: return "ApiError";
+    case kLanguageErrorClass: return "LanguageError";
+    case kUnhandledExceptionClass: return "UnhandledException";
+    case kUnwindErrorClass: return "UnwindError";
     default: break;
   }
   UNREACHABLE();
@@ -216,6 +240,7 @@ void Object::InitOnce() {
     uword address = heap->Allocate(Instance::InstanceSize(), Heap::kOld);
     null_ = reinterpret_cast<RawInstance*>(address + kHeapObjectTag);
     InitializeObject(address, Instance::InstanceSize());  // Using 'null_'.
+    null_->ptr()->tags_ = 0;
   }
 
   // Initialize object_store empty array to null_ in order to be able to check
@@ -320,6 +345,9 @@ void Object::InitOnce() {
   cls = Class::New<PcDescriptors>();
   pc_descriptors_class_ = cls.raw();
 
+  cls = Class::New<LocalVarDescriptors>();
+  var_descriptors_class_ = cls.raw();
+
   cls = Class::New<ExceptionHandlers>();
   exception_handlers_class_ = cls.raw();
 
@@ -331,6 +359,15 @@ void Object::InitOnce() {
 
   cls = Class::New<ApiError>();
   api_error_class_ = cls.raw();
+
+  cls = Class::New<LanguageError>();
+  language_error_class_ = cls.raw();
+
+  cls = Class::New<UnhandledException>();
+  unhandled_exception_class_ = cls.raw();
+
+  cls = Class::New<UnwindError>();
+  unwind_error_class_ = cls.raw();
 
   ASSERT(class_class() != null_);
 }
@@ -480,11 +517,6 @@ void Object::Init(Isolate* isolate) {
   cls = Class::New<ExternalFourByteString>();
   object_store->set_external_four_byte_string_class(cls);
   RegisterClass(cls, "ExternalFourByteString", impl_script, core_impl_lib);
-  pending_classes.Add(&Class::ZoneHandle(cls.raw()));
-
-  cls = Class::New<UnhandledException>();
-  object_store->set_unhandled_exception_class(cls);
-  RegisterClass(cls, "UnhandledException", impl_script, core_impl_lib);
   pending_classes.Add(&Class::ZoneHandle(cls.raw()));
 
   cls = Class::New<Stacktrace>();
@@ -669,9 +701,6 @@ void Object::InitFromSnapshot(Isolate* isolate) {
   cls = Class::New<Bool>();
   object_store->set_bool_class(cls);
 
-  cls = Class::New<UnhandledException>();
-  object_store->set_unhandled_exception_class(cls);
-
   cls = Class::New<Stacktrace>();
   object_store->set_stacktrace_class(cls);
 
@@ -693,6 +722,8 @@ void Object::Print() const {
 
 
 void Object::InitializeObject(uword address, intptr_t size) {
+  // TODO(iposva): Get a proper halt instruction from the assembler which
+  // would be needed here for code objects.
   uword initial_value = reinterpret_cast<uword>(null_);
   uword cur = address;
   uword end = address + size;
@@ -706,16 +737,26 @@ void Object::InitializeObject(uword address, intptr_t size) {
 RawObject* Object::Allocate(const Class& cls,
                             intptr_t size,
                             Heap::Space space) {
+  ASSERT(Utils::IsAligned(size, kObjectAlignment));
   Isolate* isolate = Isolate::Current();
   Heap* heap = isolate->heap();
 
-  // TODO(iposva): Get a proper halt instruction from the assembler.
   uword address = heap->Allocate(size, space);
+  if (address == 0) {
+    // Use the preallocated out of memory exception to avoid calling
+    // into dart code or allocating any code.
+    const Instance& exception =
+        Instance::Handle(isolate->object_store()->out_of_memory());
+    Exceptions::Throw(exception);
+    UNREACHABLE();
+  }
   NoGCScope no_gc;
   InitializeObject(address, size);
   RawObject* raw_obj = reinterpret_cast<RawObject*>(address + kHeapObjectTag);
   raw_obj->ptr()->class_ = cls.raw();
-  raw_obj->ptr()->tags_ = 0;
+  uword tags = 0;
+  tags = RawObject::SizeTag::update(size, tags);
+  raw_obj->ptr()->tags_ = tags;
   return raw_obj;
 }
 
@@ -724,7 +765,7 @@ RawString* Class::Name() const {
   if (raw_ptr()->name_ != String::null()) {
     return raw_ptr()->name_;
   }
-  ASSERT(class_class() != null_);  // Or GetSingletonClassIndex will not work.
+  ASSERT(class_class() != Class::null());  // class_class_ should be set up.
   intptr_t index = GetSingletonClassIndex(raw());
   return String::NewSymbol(GetSingletonClassName(index));
 }
@@ -1141,9 +1182,6 @@ RawClass* Class::NewSignatureClass(const String& name,
 RawClass* Class::GetClass(ObjectKind kind) {
   ObjectStore* object_store = Isolate::Current()->object_store();
   switch (kind) {
-    case kUnhandledException:
-      ASSERT(object_store->unhandled_exception_class() != Class::null());
-      return object_store->unhandled_exception_class();
     case kSmi:
       ASSERT(object_store->smi_class() != Class::null());
       return object_store->smi_class();
@@ -4578,6 +4616,80 @@ const char* PcDescriptors::ToCString() const {
 }
 
 
+RawString* LocalVarDescriptors::GetName(intptr_t var_index) const {
+  ASSERT(var_index < Length());
+  const Array& names = Array::Handle(raw_ptr()->names_);
+  ASSERT(Length() == names.Length());
+  const String& name = String::CheckedHandle(names.At(var_index));
+  return name.raw();
+}
+
+
+void LocalVarDescriptors::GetScopeInfo(
+                              intptr_t var_index,
+                              intptr_t* scope_id,
+                              intptr_t* begin_token_pos,
+                              intptr_t* end_token_pos) const {
+  ASSERT(var_index < Length());
+  RawLocalVarDescriptors::VarInfo *info = &raw_ptr()->data_[var_index];
+  *scope_id = info->scope_id;
+  *begin_token_pos = info->begin_pos;
+  *end_token_pos = info->end_pos;
+}
+
+
+intptr_t LocalVarDescriptors::GetSlotIndex(intptr_t var_index) const {
+  ASSERT(var_index < Length());
+  RawLocalVarDescriptors::VarInfo *info = &raw_ptr()->data_[var_index];
+  return info->index;
+}
+
+
+void LocalVarDescriptors::SetVar(intptr_t var_index,
+                                 const String& name,
+                                 intptr_t stack_slot,
+                                 intptr_t scope_id,
+                                 intptr_t begin_pos,
+                                 intptr_t end_pos) const {
+  ASSERT(var_index < Length());
+  const Array& names = Array::Handle(raw_ptr()->names_);
+  ASSERT(Length() == names.Length());
+  names.SetAt(var_index, name);
+  RawLocalVarDescriptors::VarInfo *info = &raw_ptr()->data_[var_index];
+  info->index = stack_slot;
+  info->scope_id = scope_id;
+  info->begin_pos = begin_pos;
+  info->end_pos = end_pos;
+}
+
+
+const char* LocalVarDescriptors::ToCString() const {
+  UNIMPLEMENTED();
+  return "LocalVarDescriptors";
+}
+
+
+RawLocalVarDescriptors* LocalVarDescriptors::New(intptr_t num_variables) {
+  const Class& cls = Class::Handle(Object::var_descriptors_class());
+  LocalVarDescriptors& result = LocalVarDescriptors::Handle();
+  {
+    uword size = LocalVarDescriptors::InstanceSize(num_variables);
+    RawObject* raw = Object::Allocate(cls, size, Heap::kOld);
+    NoGCScope no_gc;
+    result ^= raw;
+    result.raw_ptr()->length_ = num_variables;
+  }
+  const Array& names = Array::Handle(Array::New(num_variables, Heap::kOld));
+  result.raw_ptr()->names_ = names.raw();
+  return result.raw();
+}
+
+
+intptr_t LocalVarDescriptors::Length() const {
+  return raw_ptr()->length_;
+}
+
+
 intptr_t ExceptionHandlers::Length() const {
   return Smi::Value(raw_ptr()->length_);
 }
@@ -4925,12 +5037,85 @@ const char* ContextScope::ToCString() const {
 }
 
 
+const char* Error::ToErrorCString() const {
+  UNREACHABLE();
+  return "Internal Error";
+}
+
+
+const char* Error::ToCString() const {
+  // Error is an abstract class.  We should never reach here.
+  UNREACHABLE();
+  return "Error";
+}
+
+
+RawApiError* ApiError::New(const String& message, Heap::Space space) {
+  const Class& cls = Class::Handle(Object::api_error_class());
+  ApiError& result = ApiError::Handle();
+  {
+    RawObject* raw = Object::Allocate(cls,
+                                      ApiError::InstanceSize(),
+                                      space);
+    NoGCScope no_gc;
+    result ^= raw;
+  }
+  result.set_message(message);
+  return result.raw();
+}
+
+
+void ApiError::set_message(const String& message) const {
+  StorePointer(&raw_ptr()->message_, message.raw());
+}
+
+
+const char* ApiError::ToErrorCString() const {
+  const String& msg_str = String::Handle(message());
+  return msg_str.ToCString();
+}
+
+
+const char* ApiError::ToCString() const {
+  return "ApiError";
+}
+
+
+RawLanguageError* LanguageError::New(const String& message, Heap::Space space) {
+  const Class& cls = Class::Handle(Object::language_error_class());
+  LanguageError& result = LanguageError::Handle();
+  {
+    RawObject* raw = Object::Allocate(cls,
+                                      LanguageError::InstanceSize(),
+                                      space);
+    NoGCScope no_gc;
+    result ^= raw;
+  }
+  result.set_message(message);
+  return result.raw();
+}
+
+
+void LanguageError::set_message(const String& message) const {
+  StorePointer(&raw_ptr()->message_, message.raw());
+}
+
+
+const char* LanguageError::ToErrorCString() const {
+  const String& msg_str = String::Handle(message());
+  return msg_str.ToCString();
+}
+
+
+const char* LanguageError::ToCString() const {
+  return "LanguageError";
+}
+
+
 RawUnhandledException* UnhandledException::New(const Instance& exception,
                                                const Instance& stacktrace,
                                                Heap::Space space) {
-  Isolate* isolate = Isolate::Current();
-  const Class& cls = Class::Handle(
-      isolate->object_store()->unhandled_exception_class());
+  const Class& cls = Class::Handle(Object::unhandled_exception_class());
   UnhandledException& result = UnhandledException::Handle();
   {
     RawObject* raw = Object::Allocate(cls,
@@ -4955,49 +5140,69 @@ void UnhandledException::set_stacktrace(const Instance& stacktrace) const {
 }
 
 
+const char* UnhandledException::ToErrorCString() const {
+  Isolate* isolate = Isolate::Current();
+  HANDLESCOPE(isolate);
+  Object& strtmp = Object::Handle();
+
+  const Instance& exc = Instance::Handle(exception());
+  strtmp = DartLibraryCalls::ToString(exc);
+  const char* exc_str =
+      "<Received error while converting exception to string>";
+  if (!strtmp.IsError()) {
+    exc_str = strtmp.ToCString();
+  }
+  const Instance& stack = Instance::Handle(stacktrace());
+  strtmp = DartLibraryCalls::ToString(stack);
+  const char* stack_str =
+      "<Received error while converting stack trace to string>";
+  if (!strtmp.IsError()) {
+    stack_str = strtmp.ToCString();
+  }
+
+  const char* format = "Unhandled exception:\n%s\n%s";
+  int len = (strlen(exc_str) + strlen(stack_str) + strlen(format)
+             - 4    // Two '%s'
+             + 1);  // '\0'
+  char* chars = reinterpret_cast<char*>(isolate->current_zone()->Allocate(len));
+  OS::SNPrint(chars, len, format, exc_str, stack_str);
+  return chars;
+}
+
+
 const char* UnhandledException::ToCString() const {
   return "UnhandledException";
 }
 
 
-RawApiError* ApiError::New(const String& message, Heap::Space space) {
-  const Class& cls = Class::Handle(Object::api_error_class());
-  ApiError& result = ApiError::Handle();
+RawUnwindError* UnwindError::New(const String& message, Heap::Space space) {
+  const Class& cls = Class::Handle(Object::unwind_error_class());
+  UnwindError& result = UnwindError::Handle();
   {
     RawObject* raw = Object::Allocate(cls,
-                                      ApiError::InstanceSize(),
+                                      UnwindError::InstanceSize(),
                                       space);
     NoGCScope no_gc;
     result ^= raw;
   }
-  result.set_data(message);
+  result.set_message(message);
   return result.raw();
 }
 
 
-RawApiError* ApiError::New(const UnhandledException& exception,
-                           Heap::Space space) {
-  const Class& cls = Class::Handle(Object::api_error_class());
-  ApiError& result = ApiError::Handle();
-  {
-    RawObject* raw = Object::Allocate(cls,
-                                      ApiError::InstanceSize(),
-                                      space);
-    NoGCScope no_gc;
-    result ^= raw;
-  }
-  result.set_data(exception);
-  return result.raw();
+void UnwindError::set_message(const String& message) const {
+  StorePointer(&raw_ptr()->message_, message.raw());
 }
 
 
-void ApiError::set_data(const Object& data) const {
-  StorePointer(&raw_ptr()->data_, data.raw());
+const char* UnwindError::ToErrorCString() const {
+  UNIMPLEMENTED();
+  return "UnwindError";
 }
 
 
-const char* ApiError::ToCString() const {
-  return "ApiError";
+const char* UnwindError::ToCString() const {
+  return "UnwindError";
 }
 
 
@@ -5183,11 +5388,6 @@ RawInstance* Instance::New(const Class& cls, Heap::Space space) {
     // Initialize all native fields to NULL.
     for (intptr_t i = 0; i < cls.num_native_fields(); i++) {
       *reinterpret_cast<uword*>(addr + offset) = 0;
-      offset += kWordSize;
-    }
-    // Initialize all dart fields to null.
-    while (offset < instance_size) {
-      *reinterpret_cast<RawObject**>(addr + offset) = Object::null();
       offset += kWordSize;
     }
   }
@@ -7020,9 +7220,6 @@ RawArray* Array::New(word len, bool immutable, Heap::Space space) {
     NoGCScope no_gc;
     result ^= raw;
     result.SetLength(len);
-    for (intptr_t i = 0; i < len; i++) {
-      *result.ObjectAddr(i) = Object::null();
-    }
   }
   return result.raw();
 }

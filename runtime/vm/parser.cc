@@ -546,6 +546,18 @@ struct TopLevel {
 };
 
 
+static bool HasReturnNode(SequenceNode* seq) {
+  if (seq->length() == 0) {
+    return false;
+  } else if ((seq->length()) == 1 &&
+             (seq->NodeAt(seq->length() - 1)->IsSequenceNode())) {
+    return HasReturnNode(seq->NodeAt(seq->length() - 1)->AsSequenceNode());
+  } else {
+    return seq->NodeAt(seq->length() - 1)->IsReturnNode();
+  }
+}
+
+
 void Parser::ParseFunction(ParsedFunction* parsed_function) {
   Isolate* isolate = Isolate::Current();
   // Compilation can be nested, preserve the ast node id.
@@ -584,8 +596,7 @@ void Parser::ParseFunction(ParsedFunction* parsed_function) {
       UNREACHABLE();
   }
 
-  if ((node_sequence->length() == 0) ||
-      !node_sequence->NodeAt(node_sequence->length() - 1)->IsReturnNode()) {
+  if (!HasReturnNode(node_sequence)) {
     // Add implicit return node.
     node_sequence->Add(new ReturnNode(parser.token_index_));
   }
@@ -1834,6 +1845,7 @@ SequenceNode* Parser::ParseFunc(const Function& func,
     }
   }
 
+  OpenBlock();  // Open a nested scope for the outermost function block.
   if (CurrentToken() == Token::kLBRACE) {
     ConsumeToken();
     ParseStatementSequence();
@@ -1849,9 +1861,9 @@ SequenceNode* Parser::ParseFunc(const Function& func,
   } else {
     UnexpectedToken();
   }
-
-  SequenceNode* statements = CloseBlock();
-  return statements;
+  SequenceNode* body = CloseBlock();
+  current_block_->statements->Add(body);
+  return CloseBlock();
 }
 
 
@@ -2500,9 +2512,18 @@ void Parser::ParseClassDefinition(GrowableArray<const Class*>* classes) {
   Type& super_type = Type::Handle();
   if (CurrentToken() == Token::kEXTENDS) {
     ConsumeToken();
-    super_type ^= ParseType(kCanResolve);
+    const intptr_t type_pos = token_index_;
+    const AbstractType& type = AbstractType::Handle(ParseType(kCanResolve));
+    if (type.IsTypeParameter()) {
+      ErrorMsg(type_pos,
+               "class '%s' may not extend type parameter '%s'",
+               class_name.ToCString(),
+               String::Handle(type.Name()).ToCString());
+    }
+    super_type ^= type.raw();
     if (super_type.IsInterfaceType()) {
-      ErrorMsg("class '%s' may implement, but cannot extend interface '%s'",
+      ErrorMsg(type_pos,
+               "class '%s' may implement, but cannot extend interface '%s'",
                class_name.ToCString(),
                String::Handle(super_type.Name()).ToCString());
     }
@@ -2760,6 +2781,9 @@ void Parser::ParseInterfaceDefinition(GrowableArray<const Class*>* classes) {
       Warning("'factory' is obsolete, use 'default' instead.");
     }
     ConsumeToken();
+    if (CurrentToken() != Token::kIDENT) {
+      ErrorMsg("class name expected");
+    }
     const intptr_t factory_pos = token_index_;
     QualIdent factory_name;
     ParseQualIdent(&factory_name);
@@ -2989,6 +3013,19 @@ void Parser::AddInterfaces(intptr_t interfaces_pos,
   for (intptr_t i = 0; i < interfaces.Length(); i++) {
     AbstractType& interface = AbstractType::ZoneHandle();
     interface ^= interfaces.At(i);
+    if (interface.IsTypeParameter()) {
+      if (cls.is_interface()) {
+        ErrorMsg(interfaces_pos,
+                 "interface '%s' may not extend type parameter '%s'",
+                 String::Handle(cls.Name()).ToCString(),
+                 String::Handle(interface.Name()).ToCString());
+      } else {
+        ErrorMsg(interfaces_pos,
+                 "class '%s' may not implement type parameter '%s'",
+                 String::Handle(cls.Name()).ToCString(),
+                 String::Handle(interface.Name()).ToCString());
+      }
+    }
     if (!ClassFinalizer::AddInterfaceIfUnique(&all_interfaces,
                                               &interface,
                                               &conflicting)) {
@@ -3436,6 +3473,10 @@ void Parser::OpenFunctionBlock(const Function& func) {
 
 SequenceNode* Parser::CloseBlock() {
   SequenceNode* statements = current_block_->statements;
+  if (current_block_->scope != NULL) {
+    // Record the end token index of the scope.
+    current_block_->scope->set_end_token_index(token_index_);
+  }
   current_block_ = current_block_->parent;
   return statements;
 }

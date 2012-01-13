@@ -84,6 +84,10 @@ class ObjectArray<E> implements List<E> {
     Collections.forEach(this, f);
   }
 
+  Collection map(f(E element)) {
+    return Collections.map(this, new GrowableObjectArray.withCapacity(length), f);
+  }
+
   Collection<E> filter(bool f(E element)) {
     return Collections.filter(this, new GrowableObjectArray<E>(), f);
   }
@@ -234,7 +238,7 @@ class ImmutableArray<E> implements List<E> {
   }
 
   String toString() {
-    return "ImmutableArray";
+    return Arrays.asString(this);
   }
 
   int indexOf(E element, [int start = 0]) {

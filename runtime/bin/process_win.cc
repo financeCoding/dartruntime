@@ -1,13 +1,13 @@
-// Copyright (c) 2011, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 #include <process.h>
 
 #include "bin/builtin.h"
-#include "bin/globals.h"
 #include "bin/process.h"
 #include "bin/eventhandler.h"
+#include "platform/globals.h"
 
 static const int kReadHandle = 0;
 static const int kWriteHandle = 1;
@@ -211,10 +211,6 @@ static unsigned int __stdcall TerminationWaitThread(void* args) {
     fprintf(stderr, "GetExitCodeProcess failed %d\n", GetLastError());
   }
   int negative = 0;
-  if (exit_code == 255) {
-    exit_code = 1;
-    negative = 1;
-  }
   if (exit_code < 0) {
     exit_code = abs(exit_code);
     negative = 1;
@@ -233,6 +229,7 @@ static unsigned int __stdcall TerminationWaitThread(void* args) {
 int Process::Start(const char* path,
                    char* arguments[],
                    intptr_t arguments_length,
+                   const char* working_directory,
                    intptr_t* in,
                    intptr_t* out,
                    intptr_t* err,
@@ -350,7 +347,7 @@ int Process::Start(const char* path,
                               TRUE,   // InheritHandles
                               0,      // CreationFlags
                               NULL,   // Environment
-                              NULL,   // CurrentDirectory,
+                              working_directory,
                               &startup_info,
                               &process_info);
 
